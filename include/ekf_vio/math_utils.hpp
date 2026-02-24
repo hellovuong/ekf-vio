@@ -23,7 +23,7 @@ namespace math {
 // ---------------------------------------------------------------------------
 // Skew-symmetric matrix [v]×  such that [v]× u = v × u
 // ---------------------------------------------------------------------------
-inline Eigen::Matrix3d skew(const Eigen::Vector3d &v) {
+inline Eigen::Matrix3d skew(const Eigen::Vector3d& v) {
   Eigen::Matrix3d S;
   S << 0, -v.z(), v.y(), v.z(), 0, -v.x(), -v.y(), v.x(), 0;
   return S;
@@ -33,7 +33,7 @@ inline Eigen::Matrix3d skew(const Eigen::Vector3d &v) {
 // Rodrigues / small-angle rotation vector → rotation matrix
 //   R = I + sinθ/θ [ω]× + (1-cosθ)/θ² [ω]×²
 // ---------------------------------------------------------------------------
-inline Eigen::Matrix3d expSO3(const Eigen::Vector3d &omega) {
+inline Eigen::Matrix3d expSO3(const Eigen::Vector3d& omega) {
   const double theta = omega.norm();
   if (theta < 1e-9) {
     return Eigen::Matrix3d::Identity() + skew(omega);
@@ -46,12 +46,11 @@ inline Eigen::Matrix3d expSO3(const Eigen::Vector3d &omega) {
 // ---------------------------------------------------------------------------
 // Rotation matrix → rotation vector (log map)
 // ---------------------------------------------------------------------------
-inline Eigen::Vector3d logSO3(const Eigen::Matrix3d &R) {
+inline Eigen::Vector3d logSO3(const Eigen::Matrix3d& R) {
   const double cosAngle =
       std::max(-1.0, std::min(1.0, (R.trace() - 1.0) * 0.5));
   const double theta = std::acos(cosAngle);
-  if (std::abs(theta) < 1e-9)
-    return Eigen::Vector3d::Zero();
+  if (std::abs(theta) < 1e-9) return Eigen::Vector3d::Zero();
   return theta / (2.0 * std::sin(theta)) *
          Eigen::Vector3d(R(2, 1) - R(1, 2), R(0, 2) - R(2, 0),
                          R(1, 0) - R(0, 1));
@@ -61,8 +60,8 @@ inline Eigen::Vector3d logSO3(const Eigen::Matrix3d &R) {
 // Quaternion ⊞ error-rotation-vector   (boxplus on SO3)
 //   q_new = expSO3(dtheta) ⊗ q
 // ---------------------------------------------------------------------------
-inline Eigen::Quaterniond boxplus(const Eigen::Quaterniond &q,
-                                  const Eigen::Vector3d &dtheta) {
+inline Eigen::Quaterniond boxplus(const Eigen::Quaterniond& q,
+                                  const Eigen::Vector3d& dtheta) {
   const Eigen::Quaterniond dq(expSO3(dtheta));
   return (dq * q).normalized();
 }
@@ -72,7 +71,7 @@ inline Eigen::Quaterniond boxplus(const Eigen::Quaterniond &q,
 //   J_l = sinθ/θ I + (1-sinθ/θ)[ω]×/θ + (1-cosθ)/θ² [ω]×²
 //   (approx I + 0.5[ω]× for small angles)
 // ---------------------------------------------------------------------------
-inline Eigen::Matrix3d leftJacobianSO3(const Eigen::Vector3d &omega) {
+inline Eigen::Matrix3d leftJacobianSO3(const Eigen::Vector3d& omega) {
   const double theta = omega.norm();
   if (theta < 1e-9) {
     return Eigen::Matrix3d::Identity() + 0.5 * skew(omega);
@@ -85,16 +84,15 @@ inline Eigen::Matrix3d leftJacobianSO3(const Eigen::Vector3d &omega) {
 // ---------------------------------------------------------------------------
 // Inverse left Jacobian of SO(3)
 // ---------------------------------------------------------------------------
-inline Eigen::Matrix3d invLeftJacobianSO3(const Eigen::Vector3d &omega) {
+inline Eigen::Matrix3d invLeftJacobianSO3(const Eigen::Vector3d& omega) {
   const double theta = omega.norm();
   if (theta < 1e-9) {
     return Eigen::Matrix3d::Identity() - 0.5 * skew(omega);
   }
   const Eigen::Matrix3d K = skew(omega / theta);
-  return Eigen::Matrix3d::Identity() - 0.5 * K +
-         (1.0 / (theta * theta) -
-          (1.0 + std::cos(theta)) / (2.0 * theta * std::sin(theta))) *
-             K * K;
+  return Eigen::Matrix3d::Identity() - 0.5 * theta * K +
+         (1.0 - theta * (1.0 + std::cos(theta)) / (2.0 * std::sin(theta))) * K *
+             K;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +100,9 @@ inline Eigen::Matrix3d invLeftJacobianSO3(const Eigen::Vector3d &omega) {
 // Change sign convention to match your world frame!
 // Here we use ENU (up = +Z), so gravity = [0,0,-9.81]
 // ---------------------------------------------------------------------------
-inline Eigen::Vector3d gravity() { return Eigen::Vector3d(0.0, 0.0, -9.81); }
+inline Eigen::Vector3d gravity() {
+  return Eigen::Vector3d(0.0, 0.0, -9.81);
+}
 
 } // namespace math
 } // namespace ekf_vio

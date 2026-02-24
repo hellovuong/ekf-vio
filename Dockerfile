@@ -55,7 +55,7 @@ ENV CMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
 
 
 # ================================
-# Configure nvim 
+# Configure nvim
 # ================================
 RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-arm64.tar.gz && \
     rm -rf /opt/nvim-linux-x86_64 && \

@@ -40,23 +40,23 @@ public:
     double sigma_pixel = 1.5;            // pixels (reprojection noise)
   };
 
-  explicit EKF(const StereoCamera &cam, const NoiseParams &noise);
+  explicit EKF(const StereoCamera& cam, const NoiseParams& noise);
 
   // -----------------------------------------------------------------------
   // Propagate state using IMU measurement over interval dt [seconds]
   // Call this for every IMU sample (~200 Hz)
   // -----------------------------------------------------------------------
-  void predict(const ImuData &imu, double dt);
+  void predict(const ImuData& imu, double dt);
 
   // -----------------------------------------------------------------------
   // Update state using a set of triangulated stereo features
   // Call this for every camera frame (~30 Hz)
   // -----------------------------------------------------------------------
-  void update(const std::vector<Feature> &features);
+  void update(const std::vector<Feature>& features);
 
   // Accessors
-  const State &state() const { return state_; }
-  State &state() { return state_; }
+  const State& state() const { return state_; }
+  State& state() { return state_; }
 
 private:
   // -----------------------------------------------------------------------
@@ -67,9 +67,9 @@ private:
     Eigen::Vector3d p, v;
     Eigen::Quaterniond q;
   };
-  PVQ integrateRK4(const PVQ &pvq,
-                   const Eigen::Vector3d &omega_c, // corrected gyro
-                   const Eigen::Vector3d &a_c,     // corrected accel
+  PVQ integrateRK4(const PVQ& pvq,
+                   const Eigen::Vector3d& omega_c, // corrected gyro
+                   const Eigen::Vector3d& a_c,     // corrected accel
                    double dt) const;
 
   // -----------------------------------------------------------------------
@@ -80,24 +80,24 @@ private:
   //   Phi  = I + F*dt  (first-order, sufficient at high IMU rates)
   //   Q_d  = G * Q_c * G^T * dt
   // -----------------------------------------------------------------------
-  void computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
-                 Eigen::Matrix<double, 15, 15> &F,
-                 Eigen::Matrix<double, 15, 12> &G) const;
+  void computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                 Eigen::Matrix<double, 15, 15>& F,
+                 Eigen::Matrix<double, 15, 12>& G) const;
 
   // -----------------------------------------------------------------------
   // Project a 3-D point in camera frame to (left, right) pixel pairs
   // -----------------------------------------------------------------------
-  void project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
-               double &u_r, double &v_r) const;
+  void project(const Eigen::Vector3d& p_c, double& u_l, double& v_l,
+               double& u_r, double& v_r) const;
 
   // -----------------------------------------------------------------------
   // Compute measurement Jacobian  H (2×15) for one feature
   // (left u,v  or we can use all 4 observations: extend to 4×15)
   // -----------------------------------------------------------------------
   Eigen::Matrix<double, 4, 15>
-  measurementJacobian(const Feature &f,
-                      const Eigen::Matrix3d &R_cw, // rotation world→cam
-                      const Eigen::Vector3d &p_w   // 3-D point in world frame
+  measurementJacobian(const Feature& f,
+                      const Eigen::Matrix3d& R_cw, // rotation world→cam
+                      const Eigen::Vector3d& p_w   // 3-D point in world frame
   ) const;
 
   State state_;

@@ -11,6 +11,12 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(COVERAGE "Enable gcov code coverage" OFF)
+if(COVERAGE)
+  add_compile_options(--coverage -fno-inline)
+  add_link_options(--coverage)
+endif()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ──────────────────────────────────────────────────────────────────────────────
@@ -69,5 +75,18 @@ install(TARGETS ekf_vio_core vio_node
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────────────
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_math_utils test/test_math_utils.cpp)
+  target_link_libraries(test_math_utils ekf_vio_core)
+
+  ament_add_gtest(test_ekf test/test_ekf.cpp)
+  target_link_libraries(test_ekf ekf_vio_core)
+endif()
 
 ament_package()

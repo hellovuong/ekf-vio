@@ -44,31 +44,31 @@ public:
     double min_track_quality = 0.001;
   };
 
-  explicit StereoTracker(const StereoCamera &cam, const Params &p);
+  explicit StereoTracker(const StereoCamera& cam, const Params& p);
 
   // -----------------------------------------------------------------------
   // Feed a new stereo pair.  Returns tracked + triangulated features.
   // Call this at camera rate.
   // -----------------------------------------------------------------------
-  std::vector<Feature> track(const cv::Mat &img_left, const cv::Mat &img_right);
+  std::vector<Feature> track(const cv::Mat& img_left, const cv::Mat& img_right);
 
 private:
   // Detect new FAST corners in regions sparse of existing tracks
-  void detectNew(const cv::Mat &img, std::vector<cv::Point2f> &pts);
+  void detectNew(const cv::Mat& img, std::vector<cv::Point2f>& pts);
 
   // Stereo match via horizontal LK flow (rectified stereo assumed)
-  void stereoMatch(const cv::Mat &left, const cv::Mat &right,
-                   const std::vector<cv::Point2f> &left_pts,
-                   std::vector<cv::Point2f> &right_pts,
-                   std::vector<uchar> &status);
+  void stereoMatch(const cv::Mat& left, const cv::Mat& right,
+                   const std::vector<cv::Point2f>& left_pts,
+                   std::vector<cv::Point2f>& right_pts,
+                   std::vector<uchar>& status);
 
   // Triangulate from stereo (assuming rectified cameras)
   Eigen::Vector3d triangulate(double u_l, double v_l, double u_r) const;
 
   // Outlier rejection with fundamental matrix RANSAC
-  void rejectOutliers(std::vector<cv::Point2f> &prev,
-                      std::vector<cv::Point2f> &curr,
-                      std::vector<uchar> &status);
+  void rejectOutliers(std::vector<cv::Point2f>& prev,
+                      std::vector<cv::Point2f>& curr,
+                      std::vector<uchar>& status);
 
   StereoCamera cam_;
   Params params_;

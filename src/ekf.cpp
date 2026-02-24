@@ -23,13 +23,13 @@ namespace ekf_vio {
 using namespace math;
 
 // ---------------------------------------------------------------------------
-EKF::EKF(const StereoCamera &cam, const NoiseParams &noise)
+EKF::EKF(const StereoCamera& cam, const NoiseParams& noise)
     : cam_(cam), noise_(noise) {}
 
 // ---------------------------------------------------------------------------
 // PREDICT step
 // ---------------------------------------------------------------------------
-void EKF::predict(const ImuData &imu, double dt) {
+void EKF::predict(const ImuData& imu, double dt) {
   // 1. Bias-corrected measurements
   const Eigen::Vector3d omega_c = imu.gyro - state_.b_g;
   const Eigen::Vector3d a_c = imu.accel - state_.b_a;
@@ -73,9 +73,8 @@ void EKF::predict(const ImuData &imu, double dt) {
 // ---------------------------------------------------------------------------
 // UPDATE step — stereo reprojection
 // ---------------------------------------------------------------------------
-void EKF::update(const std::vector<Feature> &features) {
-  if (features.empty())
-    return;
+void EKF::update(const std::vector<Feature>& features) {
+  if (features.empty()) return;
 
   // Camera-to-world rotation and position (for point projection)
   const Eigen::Matrix3d R_cw =
@@ -90,7 +89,7 @@ void EKF::update(const std::vector<Feature> &features) {
   H_all.setZero();
 
   for (int i = 0; i < N; ++i) {
-    const Feature &f = features[i];
+    const Feature& f = features[i];
 
     // 3-D point in world frame (triangulated in camera frame, transform)
     const Eigen::Vector3d p_w =
@@ -138,11 +137,11 @@ void EKF::update(const std::vector<Feature> &features) {
 // ---------------------------------------------------------------------------
 // RK4 IMU integration
 // ---------------------------------------------------------------------------
-EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
-                           const Eigen::Vector3d &a_c, double dt) const {
+EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
+                           const Eigen::Vector3d& a_c, double dt) const {
   const Eigen::Vector3d g = gravity();
   // Derivative function: given state, return (ṗ, v̇, q̇ axis-angle)
-  auto deriv = [&](const PVQ &s) -> PVQ {
+  auto deriv = [&](const PVQ& s) -> PVQ {
     const Eigen::Matrix3d R = s.q.toRotationMatrix();
     return {s.v, R * a_c + g,
             Eigen::Quaterniond(0.0, 0.5 * omega_c.x(), 0.5 * omega_c.y(),
@@ -192,9 +191,9 @@ EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
 //  θ̇  =  ω_c             →  ∂θ̇/∂δθ = -[ω_c]×,   ∂θ̇/∂δb_g = -I
 //  ḃ_g = 0,  ḃ_a = 0
 // ---------------------------------------------------------------------------
-void EKF::computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
-                    Eigen::Matrix<double, 15, 15> &F,
-                    Eigen::Matrix<double, 15, 12> &G) const {
+void EKF::computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                    Eigen::Matrix<double, 15, 15>& F,
+                    Eigen::Matrix<double, 15, 12>& G) const {
   F.setZero();
   G.setZero();
 
@@ -211,7 +210,7 @@ void EKF::computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
 
   // Noise input matrix G (maps 12-dim noise → 15-dim error state)
   //  n = [n_g, n_a, n_bg, n_ba]
-  G.block<3, 3>(3, 3) = -R; // accel noise → velocity
+  G.block<3, 3>(3, 3) = -R;                           // accel noise → velocity
   G.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity(); // gyro noise → angle
   G.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity();  // gyro bias noise
   G.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity(); // accel bias noise
@@ -220,8 +219,8 @@ void EKF::computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
 // ---------------------------------------------------------------------------
 // Project 3-D point in left camera frame to stereo pixel pair
 // ---------------------------------------------------------------------------
-void EKF::project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
-                  double &u_r, double &v_r) const {
+void EKF::project(const Eigen::Vector3d& p_c, double& u_l, double& v_l,
+                  double& u_r, double& v_r) const {
   const double inv_z = 1.0 / p_c.z();
   u_l = cam_.fx * p_c.x() * inv_z + cam_.cx;
   v_l = cam_.fy * p_c.y() * inv_z + cam_.cy;
@@ -241,8 +240,8 @@ void EKF::project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
 // to the error-state variables (p, v=0, θ, b_g=0, b_a=0).
 // ---------------------------------------------------------------------------
 Eigen::Matrix<double, 4, 15>
-EKF::measurementJacobian(const Feature &f, const Eigen::Matrix3d &R_cw,
-                         const Eigen::Vector3d &p_w) const {
+EKF::measurementJacobian(const Feature& f, const Eigen::Matrix3d& R_cw,
+                         const Eigen::Vector3d& p_w) const {
 
   const Eigen::Vector3d pc = f.p_c; // 3-D in camera frame
   const double z = pc.z();
@@ -258,20 +257,22 @@ EKF::measurementJacobian(const Feature &f, const Eigen::Matrix3d &R_cw,
   J_proj_r << cam_.fx / z, 0.0, -cam_.fx * (pc.x() - cam_.baseline) / z2, 0.0,
       cam_.fy / z, -cam_.fy * pc.y() / z2;
 
-  // ∂p_c / ∂p_w = R_{c←w}    (3×3)
-  const Eigen::Matrix3d dp_c_dp_w = R_cw;
+  // ∂p_c / ∂δp = -R_{c←w}    (3×3)
+  // Increasing IMU position moves the feature in the opposite camera direction
+  const Eigen::Matrix3d dp_c_dp = -R_cw;
 
-  // ∂p_c / ∂δθ  = [R_{c←w} p_w]×  (rotation error)
-  // p_c ≈ (I + [δθ]×) R_{c←w} (p_w - ...) → ∂/∂δθ = -[p_c]×
-  const Eigen::Matrix3d dp_c_dtheta = -skew(pc); // approximate
+  // ∂p_c / ∂δθ = [p_c + R_cb·t_bc]× · R_cw  (full form)
+  // Approximation dropping lever arm (valid when camera-IMU offset is small):
+  //   ≈ [p_c]× · R_cw
+  const Eigen::Matrix3d dp_c_dtheta = skew(pc) * R_cw;
 
   // Stack into H (4×15)
   Eigen::Matrix<double, 4, 15> H;
   H.setZero();
 
-  // Columns 0:2  → position p
-  H.block<2, 3>(0, 0) = J_proj_l * dp_c_dp_w;
-  H.block<2, 3>(2, 0) = J_proj_r * dp_c_dp_w;
+  // Columns 0:2  → position δp
+  H.block<2, 3>(0, 0) = J_proj_l * dp_c_dp;
+  H.block<2, 3>(2, 0) = J_proj_r * dp_c_dp;
 
   // Columns 6:8  → orientation δθ
   H.block<2, 3>(0, 6) = J_proj_l * dp_c_dtheta;

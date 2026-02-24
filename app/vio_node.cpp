@@ -67,8 +67,7 @@ public:
     auto T_flat = this->get_parameter("T_cam_imu").as_double_array();
     Eigen::Matrix4d T_mat;
     for (int r = 0; r < 4; ++r)
-      for (int c = 0; c < 4; ++c)
-        T_mat(r, c) = T_flat[r * 4 + c];
+      for (int c = 0; c < 4; ++c) T_mat(r, c) = T_flat[r * 4 + c];
     cam.T_cam_imu = Eigen::Isometry3d(T_mat);
 
     EKF::NoiseParams noise;
@@ -121,7 +120,7 @@ private:
   // ----------------------------------------------------------------
   // IMU callback — runs the EKF predict step
   // ----------------------------------------------------------------
-  void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr &msg) {
+  void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
     const double t = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
 
     ImuData imu;
@@ -153,14 +152,14 @@ private:
   // Stereo callback — runs tracker + EKF update
   // ----------------------------------------------------------------
   void
-  stereoCallback(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
-                 const sensor_msgs::msg::Image::ConstSharedPtr &right_msg) {
+  stereoCallback(const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+                 const sensor_msgs::msg::Image::ConstSharedPtr& right_msg) {
 
     cv::Mat left, right;
     try {
       left = cv_bridge::toCvShare(left_msg, "mono8")->image;
       right = cv_bridge::toCvShare(right_msg, "mono8")->image;
-    } catch (const cv_bridge::Exception &e) {
+    } catch (const cv_bridge::Exception& e) {
       RCLCPP_ERROR(this->get_logger(), "cv_bridge: %s", e.what());
       return;
     }
@@ -203,8 +202,8 @@ private:
   // ----------------------------------------------------------------
   // Publish nav_msgs/Odometry + TF
   // ----------------------------------------------------------------
-  void publishOdometry(const rclcpp::Time &stamp) {
-    const State &s = ekf_->state();
+  void publishOdometry(const rclcpp::Time& stamp) {
+    const State& s = ekf_->state();
 
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = stamp;
@@ -225,8 +224,7 @@ private:
 
     // Copy pose covariance (top-left 6×6 of 15×15 error-state cov)
     for (int r = 0; r < 6; ++r)
-      for (int c = 0; c < 6; ++c)
-        odom.pose.covariance[r * 6 + c] = s.P(r, c);
+      for (int c = 0; c < 6; ++c) odom.pose.covariance[r * 6 + c] = s.P(r, c);
 
     odom_pub_->publish(odom);
 

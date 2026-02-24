@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pre-commit/action@v3.0.1
+
+  build-and-test:
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    container:
+      image: ros:jazzy-ros-base
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update && apt-get install -y --no-install-recommends \
+            build-essential \
+            python3-colcon-common-extensions \
+            libeigen3-dev \
+            libopencv-dev \
+            lcov \
+            ros-jazzy-rclcpp \
+            ros-jazzy-sensor-msgs \
+            ros-jazzy-nav-msgs \
+            ros-jazzy-geometry-msgs \
+            ros-jazzy-tf2-ros \
+            ros-jazzy-cv-bridge \
+            ros-jazzy-message-filters \
+          && rm -rf /var/lib/apt/lists/*
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: src/ekf_vio
+
+      - name: Build with coverage
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build \
+            --packages-select ekf_vio \
+            --cmake-args \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCOVERAGE=ON
+
+      - name: Run tests
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon test \
+            --packages-select ekf_vio \
+            --event-handlers console_direct+
+          colcon test-result --verbose
+
+      - name: Generate coverage report
+        shell: bash
+        run: |
+          # Capture coverage data
+          lcov --capture \
+            --directory build/ekf_vio \
+            --output-file coverage_full.info \
+            --ignore-errors mismatch
+
+          # Keep only project source files (exclude system headers, tests, generated)
+          lcov --extract coverage_full.info \
+            "*/src/ekf_vio/src/*" \
+            "*/src/ekf_vio/include/*" \
+            --output-file coverage.info
+
+          # Remove test files from coverage (may be absent after extract)
+          lcov --remove coverage.info \
+            "*/test/*" \
+            --output-file coverage.info \
+            --ignore-errors unused
+
+          # Print summary
+          lcov --list coverage.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.info
+          flags: unittests
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

@@ -23,12 +23,12 @@
 namespace ekf_vio {
 
 // ---------------------------------------------------------------------------
-StereoTracker::StereoTracker(const StereoCamera &cam, const Params &p)
+StereoTracker::StereoTracker(const StereoCamera& cam, const Params& p)
     : cam_(cam), params_(p) {}
 
 // ---------------------------------------------------------------------------
-std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
-                                          const cv::Mat &img_right) {
+std::vector<Feature> StereoTracker::track(const cv::Mat& img_left,
+                                          const cv::Mat& img_right) {
   std::vector<Feature> features;
 
   // -----------------------------------------------------------------------
@@ -56,8 +56,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
   // 2. Detect new features if we lost too many
   // -----------------------------------------------------------------------
   int valid_count = 0;
-  for (auto s : status_temporal)
-    valid_count += (s > 0);
+  for (auto s : status_temporal) valid_count += (s > 0);
 
   std::vector<cv::Point2f> new_pts;
   if (valid_count < params_.max_features / 2) {
@@ -78,7 +77,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
     }
   }
   // Add newly detected points
-  for (auto &pt : new_pts) {
+  for (auto& pt : new_pts) {
     left_pts_all.push_back(pt);
     ids_all.push_back(-1); // new feature
   }
@@ -98,8 +97,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
   prev_pts_.clear();
 
   for (size_t i = 0; i < left_pts_all.size(); ++i) {
-    if (!status_stereo[i])
-      continue;
+    if (!status_stereo[i]) continue;
 
     const double u_l = left_pts_all[i].x;
     const double v_l = left_pts_all[i].y;
@@ -113,8 +111,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
 
     // Triangulate
     const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r);
-    if (p_c.z() < 0.1 || p_c.z() > 50.0)
-      continue; // depth sanity
+    if (p_c.z() < 0.1 || p_c.z() > 50.0) continue; // depth sanity
 
     Feature feat;
     feat.id = (ids_all[i] >= 0)
@@ -140,11 +137,11 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
 }
 
 // ---------------------------------------------------------------------------
-void StereoTracker::detectNew(const cv::Mat &img,
-                              std::vector<cv::Point2f> &pts) {
+void StereoTracker::detectNew(const cv::Mat& img,
+                              std::vector<cv::Point2f>& pts) {
   // Build a mask that suppresses existing feature locations
   cv::Mat mask = cv::Mat::ones(img.size(), CV_8U) * 255;
-  for (auto &pt : prev_pts_) {
+  for (auto& pt : prev_pts_) {
     cv::circle(mask, pt, 10, 0, -1);
   }
 
@@ -154,7 +151,7 @@ void StereoTracker::detectNew(const cv::Mat &img,
 
   // Sort by response, take strongest
   std::sort(kps.begin(), kps.end(),
-            [](auto &a, auto &b) { return a.response > b.response; });
+            [](auto& a, auto& b) { return a.response > b.response; });
   const int need = params_.max_features - static_cast<int>(prev_pts_.size());
   const int take = std::min(need, static_cast<int>(kps.size()));
 
@@ -164,10 +161,10 @@ void StereoTracker::detectNew(const cv::Mat &img,
 }
 
 // ---------------------------------------------------------------------------
-void StereoTracker::stereoMatch(const cv::Mat &left, const cv::Mat &right,
-                                const std::vector<cv::Point2f> &left_pts,
-                                std::vector<cv::Point2f> &right_pts,
-                                std::vector<uchar> &status) {
+void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
+                                const std::vector<cv::Point2f>& left_pts,
+                                std::vector<cv::Point2f>& right_pts,
+                                std::vector<uchar>& status) {
   if (left_pts.empty()) {
     status.clear();
     return;
@@ -185,8 +182,7 @@ void StereoTracker::stereoMatch(const cv::Mat &left, const cv::Mat &right,
 
   // Verify epipolar constraint (same row for rectified stereo)
   for (size_t i = 0; i < left_pts.size(); ++i) {
-    if (!status[i])
-      continue;
+    if (!status[i]) continue;
     if (std::abs(left_pts[i].y - right_pts[i].y) > 2.0) {
       status[i] = 0;
     }
@@ -208,9 +204,9 @@ Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l,
 }
 
 // ---------------------------------------------------------------------------
-void StereoTracker::rejectOutliers(std::vector<cv::Point2f> &prev,
-                                   std::vector<cv::Point2f> &curr,
-                                   std::vector<uchar> &status) {
+void StereoTracker::rejectOutliers(std::vector<cv::Point2f>& prev,
+                                   std::vector<cv::Point2f>& curr,
+                                   std::vector<uchar>& status) {
   std::vector<cv::Point2f> p_in, c_in;
   for (size_t i = 0; i < status.size(); ++i) {
     if (status[i]) {
@@ -218,8 +214,7 @@ void StereoTracker::rejectOutliers(std::vector<cv::Point2f> &prev,
       c_in.push_back(curr[i]);
     }
   }
-  if (p_in.size() < 8)
-    return;
+  if (p_in.size() < 8) return;
 
   std::vector<uchar> ransac_status;
   cv::findFundamentalMat(p_in, c_in, ransac_status, cv::FM_RANSAC,
