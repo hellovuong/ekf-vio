@@ -58,7 +58,7 @@ ENV CMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
 # Configure nvim 
 # ================================
 RUN curl -LO https://github.com/neovim/neovim/releases/latest/download/nvim-linux-arm64.tar.gz && \
-    rm -rf /opt/nvim-linux-x86_64 && \
+    rm -rf /opt/nvim-linux-arm64 && \
     tar -C /opt -xzf nvim-linux-arm64.tar.gz
 RUN git clone https://github.com/hellovuong/astronvim_config.git ~/.config/nvim
 

@@ -32,6 +32,7 @@ find_package(OpenCV 4 REQUIRED
 add_library(ekf_vio_core
     src/ekf.cpp
     src/stereo_tracker.cpp
+    src/euroc_reader.cpp
 )
 
 target_include_directories(ekf_vio_core PUBLIC
@@ -43,6 +44,12 @@ target_link_libraries(ekf_vio_core PUBLIC
     Eigen3::Eigen
     ${OpenCV_LIBS}
 )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Executable: euroc_runner  (standalone, no ROS2 dependency)
+# ──────────────────────────────────────────────────────────────────────────────
+add_executable(euroc_runner app/euroc_main.cpp)
+target_link_libraries(euroc_runner PRIVATE ekf_vio_core)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Executable: vio_node
@@ -62,7 +69,7 @@ target_link_libraries(vio_node PRIVATE ekf_vio_core
 # ──────────────────────────────────────────────────────────────────────────────
 # Install
 # ──────────────────────────────────────────────────────────────────────────────
-install(TARGETS ekf_vio_core vio_node
+install(TARGETS ekf_vio_core vio_node euroc_runner
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
