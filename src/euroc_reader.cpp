@@ -1,9 +1,9 @@
 #include "ekf_vio/euroc_reader.hpp"
+#include <ekf_vio/logging.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
-#include <iostream>
 #include <cmath>
 #include <filesystem>
 
@@ -36,17 +36,17 @@ EurocReader::EurocReader(const std::string& sequence_path) {
 // ---------------------------------------------------------------------------
 bool EurocReader::load() {
     if (!loadImu()) {
-        std::cerr << "[EurocReader] Failed to load IMU data.\n";
+        get_logger()->warn("Failed to load IMU data");
         return false;
     }
 
     if (!loadCameraTimestamps(base_path_ + "/cam0", cam0_entries_)) {
-        std::cerr << "[EurocReader] Failed to load cam0 data.\n";
+        get_logger()->warn("Failed to load cam0 data");
         return false;
     }
 
     if (!loadCameraTimestamps(base_path_ + "/cam1", cam1_entries_)) {
-        std::cerr << "[EurocReader] Failed to load cam1 data.\n";
+        get_logger()->warn("Failed to load cam1 data");
         return false;
     }
 
@@ -60,11 +60,9 @@ bool EurocReader::load() {
 
     buildTimeline();
 
-    std::cout << "[EurocReader] Loaded: "
-              << imu_data_.size()          << " IMU, "
-              << stereo_timestamps_.size() << " stereo, "
-              << ground_truth_.size()      << " GT, "
-              << events_.size()            << " total events.\n";
+    get_logger()->info("Loaded: {} IMU, {} stereo, {} GT, {} total events",
+                       imu_data_.size(), stereo_timestamps_.size(),
+                       ground_truth_.size(), events_.size());
     return true;
 }
 
@@ -201,11 +199,11 @@ StereoImages EurocReader::loadStereo(size_t stereo_index) const {
                           cv::IMREAD_GRAYSCALE);
 
     if (si.left.empty())
-        std::cerr << "[EurocReader] Failed to load left image: "
-                  << cam0_entries_[stereo_index].second << "\n";
+        get_logger()->warn("Failed to load left image: {}",
+                           cam0_entries_[stereo_index].second);
     if (si.right.empty())
-        std::cerr << "[EurocReader] Failed to load right image: "
-                  << cam1_entries_[stereo_index].second << "\n";
+        get_logger()->warn("Failed to load right image: {}",
+                           cam1_entries_[stereo_index].second);
 
     return si;
 }

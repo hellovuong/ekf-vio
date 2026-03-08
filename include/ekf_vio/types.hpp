@@ -65,7 +65,7 @@ struct Feature {
 // Camera intrinsics & stereo extrinsics
 struct StereoCamera {
   double fx, fy, cx, cy;       // left camera intrinsics
-  double baseline;             // metres, right cam offset along -X_cam
+  double baseline;             // metres (stereo baseline along camera X)
   Eigen::Isometry3d T_cam_imu; // T_{cam←imu}
 };
 

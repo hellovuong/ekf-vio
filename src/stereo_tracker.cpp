@@ -70,17 +70,17 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
   std::vector<cv::Point2f> left_pts_all;
   std::vector<int> ids_all;
 
-  // Add successfully tracked points
+  // Add successfully tracked points (carry forward persistent IDs)
   for (size_t i = 0; i < prev_pts_.size(); ++i) {
     if (i < status_temporal.size() && status_temporal[i]) {
       left_pts_all.push_back(curr_pts[i]);
-      ids_all.push_back(static_cast<int>(i)); // we re-index below
+      ids_all.push_back(prev_ids_[i]);
     }
   }
   // Add newly detected points
   for (auto &pt : new_pts) {
     left_pts_all.push_back(pt);
-    ids_all.push_back(-1); // new feature
+    ids_all.push_back(-1); // new feature, will be assigned below
   }
 
   // -----------------------------------------------------------------------
@@ -106,19 +106,19 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
     const double u_r = right_pts[i].x;
     const double v_r = right_pts[i].y;
 
-    // Disparity check
+    // Disparity check (horizontal stereo: left pixel is to the right of right)
     const double disparity = u_l - u_r;
     if (disparity < params_.min_disparity || disparity > params_.max_disparity)
       continue;
 
     // Triangulate
-    const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r);
-    if (p_c.z() < 0.1 || p_c.z() > 50.0)
+    const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r, v_r);
+    if (p_c.z() < 0.2 || p_c.z() > 30.0)
       continue; // depth sanity
 
     Feature feat;
     feat.id = (ids_all[i] >= 0)
-                  ? ids_all[i] // reuse existing id  (TODO: map properly)
+                  ? ids_all[i]
                   : next_id_++;
     feat.u_l = u_l;
     feat.v_l = v_l;
@@ -135,6 +135,9 @@ std::vector<Feature> StereoTracker::track(const cv::Mat &img_left,
   // -----------------------------------------------------------------------
   img_left.copyTo(prev_left_);
   prev_pts_ = good_left_pts;
+  prev_ids_.clear();
+  for (const auto &f : features)
+    prev_ids_.push_back(f.id);
 
   return features;
 }
@@ -173,9 +176,8 @@ void StereoTracker::stereoMatch(const cv::Mat &left, const cv::Mat &right,
     return;
   }
 
-  // Initialise right_pts on same row (epipolar line for rectified images)
+  // Horizontal stereo: LK flow
   right_pts = left_pts;
-
   std::vector<float> err;
   cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30,
                             0.01);
@@ -183,25 +185,21 @@ void StereoTracker::stereoMatch(const cv::Mat &left, const cv::Mat &right,
                            cv::Size(params_.lk_win_size, params_.lk_win_size),
                            params_.lk_max_level, criteria);
 
-  // Verify epipolar constraint (same row for rectified stereo)
+  // Verify epipolar constraint (same row for horizontal stereo)
   for (size_t i = 0; i < left_pts.size(); ++i) {
     if (!status[i])
       continue;
-    if (std::abs(left_pts[i].y - right_pts[i].y) > 2.0) {
+    if (std::abs(left_pts[i].y - right_pts[i].y) > 2.0)
       status[i] = 0;
-    }
   }
 }
 
 // ---------------------------------------------------------------------------
 Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l,
-                                           double u_r) const {
-  // Standard stereo triangulation (rectified):
-  //   Z = fx * baseline / disparity
-  //   X = (u_l - cx) * Z / fx
-  //   Y = (v_l - cy) * Z / fy
-  const double disparity = u_l - u_r;
-  const double Z = cam_.fx * cam_.baseline / disparity;
+                                           double u_r, double v_r) const {
+  // Stereo triangulation (rectified horizontal stereo):
+  const double disp = u_l - u_r;
+  const double Z = cam_.fx * cam_.baseline / disp;
   const double X = (u_l - cam_.cx) * Z / cam_.fx;
   const double Y = (v_l - cam_.cy) * Z / cam_.fy;
   return Eigen::Vector3d(X, Y, Z);

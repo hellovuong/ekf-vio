@@ -16,6 +16,7 @@
 #pragma once
 
 #include "ekf_vio/types.hpp"
+#include <unordered_map>
 #include <vector>
 
 namespace ekf_vio {
@@ -54,6 +55,17 @@ public:
   // -----------------------------------------------------------------------
   void update(const std::vector<Feature> &features);
 
+  // -----------------------------------------------------------------------
+  // Update state using an external 6-DOF pose measurement (e.g. from VO).
+  //   p_meas : measured position in world frame
+  //   q_meas : measured orientation (world←body) as quaternion
+  //   sigma_p: position measurement noise std-dev (metres)
+  //   sigma_q: orientation measurement noise std-dev (radians)
+  // -----------------------------------------------------------------------
+  void updateFromPose(const Eigen::Vector3d &p_meas,
+                      const Eigen::Quaterniond &q_meas,
+                      double sigma_p, double sigma_q);
+
   // Accessors
   const State &state() const { return state_; }
   State &state() { return state_; }
@@ -90,19 +102,18 @@ private:
   void project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
                double &u_r, double &v_r) const;
 
-  // -----------------------------------------------------------------------
-  // Compute measurement Jacobian  H (2×15) for one feature
-  // (left u,v  or we can use all 4 observations: extend to 4×15)
-  // -----------------------------------------------------------------------
-  Eigen::Matrix<double, 4, 15>
-  measurementJacobian(const Feature &f,
-                      const Eigen::Matrix3d &R_cw, // rotation world→cam
-                      const Eigen::Vector3d &p_w   // 3-D point in world frame
-  ) const;
+  // Transform a 3-D point from camera frame to world frame using current state
+  Eigen::Vector3d camToWorld(const Eigen::Vector3d &p_c) const;
+
+  // Transform a 3-D point from world frame to camera frame using current state
+  Eigen::Vector3d worldToCam(const Eigen::Vector3d &p_w) const;
 
   State state_;
   StereoCamera cam_;
   NoiseParams noise_;
+
+  // Landmark map: feature ID → 3-D position in world frame
+  std::unordered_map<int, Eigen::Vector3d> landmarks_;
 };
 
 } // namespace ekf_vio

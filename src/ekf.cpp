@@ -15,7 +15,11 @@
 
 #include "ekf_vio/ekf.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
+#include <unordered_set>
+#include <ekf_vio/logging.hpp>
 #include <ekf_vio/math_utils.hpp>
 
 namespace ekf_vio {
@@ -71,67 +75,263 @@ void EKF::predict(const ImuData &imu, double dt) {
 }
 
 // ---------------------------------------------------------------------------
-// UPDATE step — stereo reprojection
+// UPDATE step — stereo reprojection against landmark map
 // ---------------------------------------------------------------------------
 void EKF::update(const std::vector<Feature> &features) {
   if (features.empty())
     return;
 
-  // Camera-to-world rotation and position (for point projection)
-  const Eigen::Matrix3d R_cw =
-      (state_.q.toRotationMatrix() * cam_.T_cam_imu.rotation()).transpose();
-  const Eigen::Vector3d p_cam_w =
-      state_.q.toRotationMatrix() * cam_.T_cam_imu.translation() + state_.p;
+  // Precompute transforms
+  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix(); // body→world
+  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();   // imu→cam
+  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
+  // World→camera: R_cw = R_ci * R_wb^T
+  const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
-  // Stack residuals and Jacobians over all features
-  const int N = static_cast<int>(features.size());
-  Eigen::VectorXd z_all(4 * N);     // residuals
-  Eigen::MatrixXd H_all(4 * N, 15); // Jacobians
-  H_all.setZero();
-
-  for (int i = 0; i < N; ++i) {
+  // ------------------------------------------------------------------
+  // Separate features into new (initialise landmark) vs tracked (measure)
+  // ------------------------------------------------------------------
+  std::vector<int> meas_indices;  // indices into features[] for measurement
+  for (int i = 0; i < static_cast<int>(features.size()); ++i) {
     const Feature &f = features[i];
-
-    // 3-D point in world frame (triangulated in camera frame, transform)
-    const Eigen::Vector3d p_w =
-        state_.q.toRotationMatrix() * cam_.T_cam_imu.rotation() * f.p_c +
-        p_cam_w;
-
-    // Expected projections
-    double eu_l, ev_l, eu_r, ev_r;
-    project(f.p_c, eu_l, ev_l, eu_r, ev_r);
-
-    // Residual  z - h(x)
-    z_all(4 * i + 0) = f.u_l - eu_l;
-    z_all(4 * i + 1) = f.v_l - ev_l;
-    z_all(4 * i + 2) = f.u_r - eu_r;
-    z_all(4 * i + 3) = f.v_r - ev_r;
-
-    H_all.block<4, 15>(4 * i, 0) = measurementJacobian(f, R_cw, p_w);
+    auto it = landmarks_.find(f.id);
+    if (it == landmarks_.end()) {
+      // New landmark: triangulate and store in world frame
+      landmarks_[f.id] = camToWorld(f.p_c);
+    } else {
+      meas_indices.push_back(i);
+    }
   }
 
-  // Measurement noise covariance  R = σ²_pix * I
+  const int M = static_cast<int>(meas_indices.size());
+  if (M == 0) return;
+
+  // ------------------------------------------------------------------
+  // Build stacked residuals z and Jacobians H, with outlier rejection
+  // ------------------------------------------------------------------
   const double sig2 = noise_.sigma_pixel * noise_.sigma_pixel;
+  // Chi-squared threshold for 4-DOF at 95% confidence
+  const double chi2_thresh = 9.488;
+
+  std::vector<Eigen::Vector4d> residuals;
+  std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+
+  for (int k = 0; k < M; ++k) {
+    const Feature &f = features[meas_indices[k]];
+    const Eigen::Vector3d &p_w = landmarks_.at(f.id);
+
+    // Predict camera-frame point from world landmark + current state
+    const Eigen::Vector3d p_c_pred = worldToCam(p_w);
+
+    // Skip landmarks behind the camera or too far
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0)
+      continue;
+
+    // Predicted stereo projection
+    double eu_l, ev_l, eu_r, ev_r;
+    project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
+
+    // Residual  z - h(x)
+    Eigen::Vector4d res;
+    res(0) = f.u_l - eu_l;
+    res(1) = f.v_l - ev_l;
+    res(2) = f.u_r - eu_r;
+    res(3) = f.v_r - ev_r;
+
+    // --- Measurement Jacobian (4×15) ---
+    const double z_c = p_c_pred.z();
+    const double z_c2 = z_c * z_c;
+
+    // ∂[u_l,v_l]/∂p_c
+    Eigen::Matrix<double, 2, 3> J_l;
+    J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2,
+           0.0, cam_.fy / z_c, -cam_.fy * p_c_pred.y() / z_c2;
+
+    // ∂[u_r,v_r]/∂p_c  (right camera)
+    Eigen::Matrix<double, 2, 3> J_r;
+    // Horizontal stereo: u_r = fx*(X-b)/Z + cx,  v_r = fy*Y/Z + cy
+    J_r << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2,
+           0.0, cam_.fy / z_c, -cam_.fy * p_c_pred.y() / z_c2;
+
+    // p_c = R_ci * R_wb^T * (p_w - p) + t_ci
+    // ∂p_c/∂δp = -R_cw = -R_ci * R_wb^T
+    const Eigen::Matrix3d dp_c_dp = -R_cw;
+
+    // ∂p_c/∂δθ: perturb R_wb → R_wb * exp([δθ]×), then R_wb^T → exp(-[δθ]×)*R_wb^T
+    //   δp_c = R_ci * [R_wb^T * (p_w - p)]× * δθ
+    const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.p);
+    const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
+
+    // Stack into H (4×15)
+    Eigen::Matrix<double, 4, 15> H_i;
+    H_i.setZero();
+    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;      // position
+    H_i.block<2, 3>(2, 0) = J_r * dp_c_dp;
+    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;   // orientation
+    H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;
+
+    // Mahalanobis gating: reject outliers using innovation covariance
+    const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
+    const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
+    const double mahal = res.transpose() * S_i.inverse() * res;
+    if (mahal > chi2_thresh)
+      continue;
+
+    residuals.push_back(res);
+    jacobians.push_back(H_i);
+  }
+
+  // Cap to avoid oversized H matrices (keep top features by residual norm)
+  const int max_meas = 80;
+  if (static_cast<int>(residuals.size()) > max_meas) {
+    // Keep features with smallest residuals (best matches)
+    std::vector<int> idx(residuals.size());
+    std::iota(idx.begin(), idx.end(), 0);
+    std::partial_sort(idx.begin(), idx.begin() + max_meas, idx.end(),
+        [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
+    std::vector<Eigen::Vector4d> r2;
+    std::vector<Eigen::Matrix<double, 4, 15>> j2;
+    r2.reserve(max_meas);
+    j2.reserve(max_meas);
+    for (int i = 0; i < max_meas; ++i) {
+      r2.push_back(residuals[idx[i]]);
+      j2.push_back(jacobians[idx[i]]);
+    }
+    residuals = std::move(r2);
+    jacobians = std::move(j2);
+  }
+
+  const int N = static_cast<int>(residuals.size());
+  if (N == 0) return;
+
+  // Assemble stacked z and H
+  Eigen::VectorXd z_all(4 * N);
+  Eigen::MatrixXd H_all(4 * N, 15);
+  H_all.setZero();
+  for (int k = 0; k < N; ++k) {
+    z_all.segment<4>(4 * k) = residuals[k];
+    H_all.block<4, 15>(4 * k, 0) = jacobians[k];
+  }
+
+  // ------------------------------------------------------------------
+  // Kalman update (LDLT for numerical stability)
+  // ------------------------------------------------------------------
   const Eigen::MatrixXd R_mat = Eigen::MatrixXd::Identity(4 * N, 4 * N) * sig2;
 
-  // Kalman gain  K = P H^T (H P H^T + R)^{-1}
   const Eigen::MatrixXd S = H_all * state_.P * H_all.transpose() + R_mat;
-  const Eigen::MatrixXd K = state_.P * H_all.transpose() * S.inverse();
-
-  // Error state update  δx = K * z
+  // Solve K = P * H^T * S^{-1}  via  S^T * K^T = H * P^T  →  K^T = S^{-T} * H * P
+  const Eigen::LDLT<Eigen::MatrixXd> S_ldlt(S);
+  if (S_ldlt.info() != Eigen::Success) {
+    get_logger()->warn("EKF visual update: LDLT decomposition failed");
+    return;
+  }
+  const Eigen::MatrixXd K = state_.P * H_all.transpose() * S_ldlt.solve(Eigen::MatrixXd::Identity(4 * N, 4 * N));
   const Eigen::VectorXd dx = K * z_all;
 
-  // Apply error state to nominal state (boxplus for orientation)
+  // NaN check on dx
+  if (!dx.allFinite()) {
+    get_logger()->warn("EKF visual update: dx contains NaN — skipping");
+    return;
+  }
+
   state_.p += dx.segment<3>(0);
   state_.v += dx.segment<3>(3);
   state_.q = boxplus(state_.q, dx.segment<3>(6));
   state_.b_g += dx.segment<3>(9);
   state_.b_a += dx.segment<3>(12);
 
-  // Covariance update  (Joseph form for numerical stability)
+  // Joseph form
   const Eigen::Matrix<double, 15, 15> IKH =
       Eigen::Matrix<double, 15, 15>::Identity() - K * H_all;
   state_.P = IKH * state_.P * IKH.transpose() + K * R_mat * K.transpose();
+  state_.P = 0.5 * (state_.P + state_.P.transpose());
+
+  // Enforce minimum positive-definite covariance
+  if (!state_.P.allFinite()) {
+    get_logger()->warn("EKF covariance contains NaN — resetting to default");
+    state_.P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+  }
+
+  // ------------------------------------------------------------------
+  // Re-initialise landmark world positions using posterior state.
+  // This prevents stale landmarks from biasing future updates.
+  // ------------------------------------------------------------------
+  std::unordered_set<int> observed_ids;
+  for (const auto &f : features) {
+    observed_ids.insert(f.id);
+    if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
+      landmarks_[f.id] = camToWorld(f.p_c);
+    }
+  }
+
+  // Prune landmarks not observed this frame
+  for (auto it = landmarks_.begin(); it != landmarks_.end(); ) {
+    if (observed_ids.count(it->first) == 0)
+      it = landmarks_.erase(it);
+    else
+      ++it;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// UPDATE from external 6-DOF pose (loosely-coupled VO fusion)
+// ---------------------------------------------------------------------------
+void EKF::updateFromPose(const Eigen::Vector3d &p_meas,
+                         const Eigen::Quaterniond &q_meas,
+                         double sigma_p, double sigma_q) {
+  // Residual: [dp; dtheta]
+  Eigen::Matrix<double, 6, 1> z;
+  z.head<3>() = p_meas - state_.p;
+  // Orientation error in body frame: dtheta such that R_meas = R_state * exp([dtheta]x)
+  z.tail<3>() = logSO3(state_.q.toRotationMatrix().transpose() *
+                        q_meas.toRotationMatrix());
+
+  if (!z.allFinite()) {
+    get_logger()->warn("EKF pose update: residual contains NaN — skipping");
+    return;
+  }
+
+  // Jacobian H (6x15): identity for position (idx 0:2) and orientation (idx 6:8)
+  Eigen::Matrix<double, 6, 15> H;
+  H.setZero();
+  H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();  // dp/ddp
+  H.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity();  // dtheta/ddtheta
+
+  // Measurement noise
+  Eigen::Matrix<double, 6, 6> R = Eigen::Matrix<double, 6, 6>::Zero();
+  R.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * (sigma_p * sigma_p);
+  R.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * (sigma_q * sigma_q);
+
+  // Mahalanobis gating (chi-squared 6-DOF, 95% = 12.59)
+  const Eigen::Matrix<double, 6, 6> S = H * state_.P * H.transpose() + R;
+  const double mahal = z.transpose() * S.inverse() * z;
+  if (mahal > 12.59) return;
+
+  // Kalman update
+  const Eigen::LDLT<Eigen::Matrix<double, 6, 6>> S_ldlt(S);
+  if (S_ldlt.info() != Eigen::Success) {
+    get_logger()->warn("EKF pose update: LDLT decomposition failed");
+    return;
+  }
+  const Eigen::Matrix<double, 15, 6> K =
+      state_.P * H.transpose() * S_ldlt.solve(Eigen::Matrix<double, 6, 6>::Identity());
+  const Eigen::Matrix<double, 15, 1> dx = K * z;
+
+  if (!dx.allFinite()) {
+    get_logger()->warn("EKF pose update: dx contains NaN — skipping");
+    return;
+  }
+
+  state_.p += dx.segment<3>(0);
+  state_.v += dx.segment<3>(3);
+  state_.q = boxplus(state_.q, dx.segment<3>(6));
+  state_.b_g += dx.segment<3>(9);
+  state_.b_a += dx.segment<3>(12);
+
+  // Joseph form
+  const Eigen::Matrix<double, 15, 15> IKH =
+      Eigen::Matrix<double, 15, 15>::Identity() - K * H;
+  state_.P = IKH * state_.P * IKH.transpose() + K * R * K.transpose();
   state_.P = 0.5 * (state_.P + state_.P.transpose());
 }
 
@@ -160,7 +360,7 @@ EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
 
   // k2 (use mid-point velocity from k1)
   const Eigen::Vector3d v2 = pvq.v + 0.5 * dt * dv1;
-  const Eigen::Matrix3d R2 = expSO3(omega_c * 0.5 * dt) * R;
+  const Eigen::Matrix3d R2 = R * expSO3(omega_c * 0.5 * dt);
   const Eigen::Vector3d dp2 = v2;
   const Eigen::Vector3d dv2 = R2 * a_c + g;
 
@@ -171,14 +371,14 @@ EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
 
   // k4 (full step rotation)
   const Eigen::Vector3d v4 = pvq.v + dt * dv3;
-  const Eigen::Matrix3d R4 = expSO3(omega_c * dt) * R;
+  const Eigen::Matrix3d R4 = R * expSO3(omega_c * dt);
   const Eigen::Vector3d dp4 = v4;
   const Eigen::Vector3d dv4 = R4 * a_c + g;
 
   PVQ next;
   next.p = pvq.p + (dt / 6.0) * (dp1 + 2.0 * dp2 + 2.0 * dp3 + dp4);
   next.v = pvq.v + (dt / 6.0) * (dv1 + 2.0 * dv2 + 2.0 * dv3 + dv4);
-  next.q = Eigen::Quaterniond(expSO3(omega_c * dt) * R).normalized();
+  next.q = Eigen::Quaterniond(R * expSO3(omega_c * dt)).normalized();
   return next;
 }
 
@@ -226,58 +426,35 @@ void EKF::project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
   u_l = cam_.fx * p_c.x() * inv_z + cam_.cx;
   v_l = cam_.fy * p_c.y() * inv_z + cam_.cy;
   u_r = cam_.fx * (p_c.x() - cam_.baseline) * inv_z + cam_.cx;
-  v_r = v_l; // epipolar aligned (rectified)
+  v_r = v_l;
 }
 
 // ---------------------------------------------------------------------------
-// Measurement Jacobian  H (4×15)
+// Coordinate transforms: camera ↔ world
 //
-// Observation model (stereo):
-//   z = [u_l, v_l, u_r, v_r]
-//   p_c = R_{c←w} * (p_w - p_imu_w) - R_{c←b} * p_{c←b}
-//       = R_{c←w} * p_w + t_c
+//   T_{cam←imu} given by cam_.T_cam_imu  →  R_ci, t_ci
+//   State quaternion q  →  R_{w←b} = R_wb  (body/IMU to world)
 //
-// For tightly-coupled EKF we propagate H from the 3-D point
-// to the error-state variables (p, v=0, θ, b_g=0, b_a=0).
+//   cam→world:  p_imu = R_ci^T * (p_c - t_ci)
+//               p_w   = R_wb * p_imu + p
+//
+//   world→cam:  p_imu = R_wb^T * (p_w - p)
+//               p_c   = R_ci * p_imu + t_ci
 // ---------------------------------------------------------------------------
-Eigen::Matrix<double, 4, 15>
-EKF::measurementJacobian(const Feature &f, const Eigen::Matrix3d &R_cw,
-                         const Eigen::Vector3d &p_w) const {
+Eigen::Vector3d EKF::camToWorld(const Eigen::Vector3d &p_c) const {
+  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
+  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
+  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
+  const Eigen::Vector3d p_imu = R_ci.transpose() * (p_c - t_ci);
+  return R_wb * p_imu + state_.p;
+}
 
-  const Eigen::Vector3d pc = f.p_c; // 3-D in camera frame
-  const double z = pc.z();
-  const double z2 = z * z;
-
-  // ∂[u_l, v_l] / ∂p_c  (2×3)
-  Eigen::Matrix<double, 2, 3> J_proj_l;
-  J_proj_l << cam_.fx / z, 0.0, -cam_.fx * pc.x() / z2, 0.0, cam_.fy / z,
-      -cam_.fy * pc.y() / z2;
-
-  // ∂[u_r, v_r] / ∂p_c  (2×3) — only u_r differs (x-baseline)
-  Eigen::Matrix<double, 2, 3> J_proj_r;
-  J_proj_r << cam_.fx / z, 0.0, -cam_.fx * (pc.x() - cam_.baseline) / z2, 0.0,
-      cam_.fy / z, -cam_.fy * pc.y() / z2;
-
-  // ∂p_c / ∂p_w = R_{c←w}    (3×3)
-  const Eigen::Matrix3d dp_c_dp_w = R_cw;
-
-  // ∂p_c / ∂δθ  = [R_{c←w} p_w]×  (rotation error)
-  // p_c ≈ (I + [δθ]×) R_{c←w} (p_w - ...) → ∂/∂δθ = -[p_c]×
-  const Eigen::Matrix3d dp_c_dtheta = -skew(pc); // approximate
-
-  // Stack into H (4×15)
-  Eigen::Matrix<double, 4, 15> H;
-  H.setZero();
-
-  // Columns 0:2  → position p
-  H.block<2, 3>(0, 0) = J_proj_l * dp_c_dp_w;
-  H.block<2, 3>(2, 0) = J_proj_r * dp_c_dp_w;
-
-  // Columns 6:8  → orientation δθ
-  H.block<2, 3>(0, 6) = J_proj_l * dp_c_dtheta;
-  H.block<2, 3>(2, 6) = J_proj_r * dp_c_dtheta;
-
-  return H;
+Eigen::Vector3d EKF::worldToCam(const Eigen::Vector3d &p_w) const {
+  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
+  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
+  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
+  const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.p);
+  return R_ci * p_imu + t_ci;
 }
 
 } // namespace ekf_vio

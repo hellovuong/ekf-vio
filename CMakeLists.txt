@@ -25,6 +25,8 @@ find_package(message_filters REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc features2d video calib3d)
+find_package(Sophus REQUIRED)
+find_package(spdlog REQUIRED)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Library: ekf_vio_core  (EKF + StereoTracker)
@@ -32,6 +34,7 @@ find_package(OpenCV 4 REQUIRED
 add_library(ekf_vio_core
     src/ekf.cpp
     src/stereo_tracker.cpp
+    src/stereo_vo.cpp
     src/euroc_reader.cpp
 )
 
@@ -43,6 +46,8 @@ target_include_directories(ekf_vio_core PUBLIC
 target_link_libraries(ekf_vio_core PUBLIC
     Eigen3::Eigen
     ${OpenCV_LIBS}
+    Sophus::Sophus
+    spdlog::spdlog
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -50,6 +55,9 @@ target_link_libraries(ekf_vio_core PUBLIC
 # ──────────────────────────────────────────────────────────────────────────────
 add_executable(euroc_runner app/euroc_main.cpp)
 target_link_libraries(euroc_runner PRIVATE ekf_vio_core)
+
+add_executable(euroc_vo_runner app/euroc_vo_main.cpp)
+target_link_libraries(euroc_vo_runner PRIVATE ekf_vio_core)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Executable: vio_node
@@ -69,12 +77,28 @@ target_link_libraries(vio_node PRIVATE ekf_vio_core
 # ──────────────────────────────────────────────────────────────────────────────
 # Install
 # ──────────────────────────────────────────────────────────────────────────────
-install(TARGETS ekf_vio_core vio_node euroc_runner
+install(TARGETS ekf_vio_core vio_node euroc_runner euroc_vo_runner
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Tests
+# ──────────────────────────────────────────────────────────────────────────────
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(stereo_tracker_test test/stereo_tracker_test.cpp)
+  target_link_libraries(stereo_tracker_test ekf_vio_core)
+
+  ament_add_gtest(stereo_vo_test test/stereo_vo_test.cpp)
+  target_link_libraries(stereo_vo_test ekf_vio_core)
+
+  ament_add_gtest(ekf_test test/ekf_test.cpp)
+  target_link_libraries(ekf_test ekf_vio_core)
+endif()
 
 ament_package()

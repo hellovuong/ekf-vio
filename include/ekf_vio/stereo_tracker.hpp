@@ -63,7 +63,7 @@ private:
                    std::vector<uchar> &status);
 
   // Triangulate from stereo (assuming rectified cameras)
-  Eigen::Vector3d triangulate(double u_l, double v_l, double u_r) const;
+  Eigen::Vector3d triangulate(double u_l, double v_l, double u_r, double v_r) const;
 
   // Outlier rejection with fundamental matrix RANSAC
   void rejectOutliers(std::vector<cv::Point2f> &prev,
@@ -76,6 +76,7 @@ private:
   // Previous frame data
   cv::Mat prev_left_;
   std::vector<cv::Point2f> prev_pts_;
+  std::vector<int> prev_ids_;            // persistent feature IDs (parallel to prev_pts_)
   std::map<int, cv::Point2f> id_to_pt_; // feature id → left pixel
   int next_id_ = 0;
 };
