@@ -1,17 +1,8 @@
-/**
- * /workspace/src/ekf-vio/app/vio_node.cpp
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "ekf_vio/ekf.hpp"
+#include "ekf_vio/stereo_tracker.hpp"
 
 #include <cv_bridge/cv_bridge.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -25,13 +16,10 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
-#include "ekf_vio/ekf.hpp"
-#include "ekf_vio/stereo_tracker.hpp"
-
 namespace ekf_vio {
 
 class VIONode : public rclcpp::Node {
-public:
+ public:
   VIONode() : Node("ekf_vio_node") {
     // ----------------------------------------------------------------
     // Declare and load parameters
@@ -43,9 +31,8 @@ public:
     this->declare_parameter("camera.baseline", 0.110);
 
     // IMU-to-camera extrinsics as flat 4x4 row-major
-    this->declare_parameter(
-        "T_cam_imu",
-        std::vector<double>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1});
+    this->declare_parameter("T_cam_imu",
+                            std::vector<double>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1});
 
     // Process noise
     this->declare_parameter("noise.sigma_gyro", 1.6968e-4);
@@ -74,10 +61,8 @@ public:
     EKF::NoiseParams noise;
     noise.sigma_gyro = this->get_parameter("noise.sigma_gyro").as_double();
     noise.sigma_accel = this->get_parameter("noise.sigma_accel").as_double();
-    noise.sigma_gyro_bias =
-        this->get_parameter("noise.sigma_gyro_bias").as_double();
-    noise.sigma_accel_bias =
-        this->get_parameter("noise.sigma_accel_bias").as_double();
+    noise.sigma_gyro_bias = this->get_parameter("noise.sigma_gyro_bias").as_double();
+    noise.sigma_accel_bias = this->get_parameter("noise.sigma_accel_bias").as_double();
     noise.sigma_pixel = this->get_parameter("noise.sigma_pixel").as_double();
 
     // ----------------------------------------------------------------
@@ -97,37 +82,32 @@ public:
     left_sub_.subscribe(this, "/camera/left/image_raw");
     right_sub_.subscribe(this, "/camera/right/image_raw");
 
-    using StereoPolicy = message_filters::sync_policies::ApproximateTime<
-        sensor_msgs::msg::Image, sensor_msgs::msg::Image>;
-    stereo_sync_ =
-        std::make_shared<message_filters::Synchronizer<StereoPolicy>>(
-            StereoPolicy(10), left_sub_, right_sub_);
-    stereo_sync_->registerCallback(std::bind(&VIONode::stereoCallback, this,
-                                             std::placeholders::_1,
-                                             std::placeholders::_2));
+    using StereoPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image,
+                                                                         sensor_msgs::msg::Image>;
+    stereo_sync_ = std::make_shared<message_filters::Synchronizer<StereoPolicy>>(
+        StereoPolicy(10), left_sub_, right_sub_);
+    stereo_sync_->registerCallback(
+        std::bind(&VIONode::stereoCallback, this, std::placeholders::_1, std::placeholders::_2));
 
     // ----------------------------------------------------------------
     // Publishers
     // ----------------------------------------------------------------
-    odom_pub_ =
-        this->create_publisher<nav_msgs::msg::Odometry>("/vio/odometry", 10);
+    odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/vio/odometry", 10);
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
-    RCLCPP_INFO(this->get_logger(),
-                "EKF-VIO node started. Waiting for data...");
+    RCLCPP_INFO(this->get_logger(), "EKF-VIO node started. Waiting for data...");
   }
 
-private:
+ private:
   // ----------------------------------------------------------------
   // IMU callback — runs the EKF predict step
   // ----------------------------------------------------------------
-  void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr &msg) {
+  void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
     const double t = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
 
     ImuData imu;
     imu.timestamp = t;
-    imu.gyro = {msg->angular_velocity.x, msg->angular_velocity.y,
-                msg->angular_velocity.z};
+    imu.gyro = {msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z};
     imu.accel = {msg->linear_acceleration.x, msg->linear_acceleration.y,
                  msg->linear_acceleration.z};
 
@@ -152,15 +132,13 @@ private:
   // ----------------------------------------------------------------
   // Stereo callback — runs tracker + EKF update
   // ----------------------------------------------------------------
-  void
-  stereoCallback(const sensor_msgs::msg::Image::ConstSharedPtr &left_msg,
-                 const sensor_msgs::msg::Image::ConstSharedPtr &right_msg) {
-
+  void stereoCallback(const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
+                      const sensor_msgs::msg::Image::ConstSharedPtr& right_msg) {
     cv::Mat left, right;
     try {
       left = cv_bridge::toCvShare(left_msg, "mono8")->image;
       right = cv_bridge::toCvShare(right_msg, "mono8")->image;
-    } catch (const cv_bridge::Exception &e) {
+    } catch (const cv_bridge::Exception& e) {
       RCLCPP_ERROR(this->get_logger(), "cv_bridge: %s", e.what());
       return;
     }
@@ -170,22 +148,19 @@ private:
       // (Assumes the robot starts roughly stationary)
       initAttitude();
       initialized_ = true;
-      last_imu_time_ =
-          left_msg->header.stamp.sec + left_msg->header.stamp.nanosec * 1e-9;
+      last_imu_time_ = left_msg->header.stamp.sec + left_msg->header.stamp.nanosec * 1e-9;
       RCLCPP_INFO(this->get_logger(), "EKF-VIO initialised.");
     }
 
     const auto features = tracker_->track(left, right);
 
     if (features.empty()) {
-      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                           "No features tracked.");
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "No features tracked.");
       return;
     }
 
     ekf_->update(features);
-    RCLCPP_DEBUG(this->get_logger(), "Updated with %zu features.",
-                 features.size());
+    RCLCPP_DEBUG(this->get_logger(), "Updated with %zu features.", features.size());
   }
 
   // ----------------------------------------------------------------
@@ -203,8 +178,8 @@ private:
   // ----------------------------------------------------------------
   // Publish nav_msgs/Odometry + TF
   // ----------------------------------------------------------------
-  void publishOdometry(const rclcpp::Time &stamp) {
-    const State &s = ekf_->state();
+  void publishOdometry(const rclcpp::Time& stamp) {
+    const State& s = ekf_->state();
 
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = stamp;
@@ -249,9 +224,8 @@ private:
   message_filters::Subscriber<sensor_msgs::msg::Image> left_sub_;
   message_filters::Subscriber<sensor_msgs::msg::Image> right_sub_;
 
-  using StereoPolicy =
-      message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image,
-                                                      sensor_msgs::msg::Image>;
+  using StereoPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image,
+                                                                       sensor_msgs::msg::Image>;
   std::shared_ptr<message_filters::Synchronizer<StereoPolicy>> stereo_sync_;
 
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
@@ -261,9 +235,9 @@ private:
   double last_imu_time_ = 0.0;
 };
 
-} // namespace ekf_vio
+}  // namespace ekf_vio
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   rclcpp::spin(std::make_shared<ekf_vio::VIONode>());
   rclcpp::shutdown();

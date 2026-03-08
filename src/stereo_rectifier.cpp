@@ -1,25 +1,28 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 #include "ekf_vio/stereo_rectifier.hpp"
+
 #include "ekf_vio/logging.hpp"
 
-#include <cmath>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <cmath>
+
 namespace ekf_vio {
 
-void StereoRectifier::init(const CameraConfig &ccfg) {
-  const auto &c0 = ccfg.cam0;
-  const auto &c1 = ccfg.cam1;
+void StereoRectifier::init(const CameraConfig& ccfg) {
+  const auto& c0 = ccfg.cam0;
+  const auto& c1 = ccfg.cam1;
 
-  cv::Mat K0 = (cv::Mat_<double>(3, 3) << c0.fx, 0.0, c0.cx, 0.0, c0.fy,
-                c0.cy, 0.0, 0.0, 1.0);
-  cv::Mat D0 = (cv::Mat_<double>(4, 1) << c0.distortion[0], c0.distortion[1],
-                c0.distortion[2], c0.distortion[3]);
+  cv::Mat K0 = (cv::Mat_<double>(3, 3) << c0.fx, 0.0, c0.cx, 0.0, c0.fy, c0.cy, 0.0, 0.0, 1.0);
+  cv::Mat D0 = (cv::Mat_<double>(4, 1) << c0.distortion[0], c0.distortion[1], c0.distortion[2],
+                c0.distortion[3]);
 
-  cv::Mat K1 = (cv::Mat_<double>(3, 3) << c1.fx, 0.0, c1.cx, 0.0, c1.fy,
-                c1.cy, 0.0, 0.0, 1.0);
-  cv::Mat D1 = (cv::Mat_<double>(4, 1) << c1.distortion[0], c1.distortion[1],
-                c1.distortion[2], c1.distortion[3]);
+  cv::Mat K1 = (cv::Mat_<double>(3, 3) << c1.fx, 0.0, c1.cx, 0.0, c1.fy, c1.cy, 0.0, 0.0, 1.0);
+  cv::Mat D1 = (cv::Mat_<double>(4, 1) << c1.distortion[0], c1.distortion[1], c1.distortion[2],
+                c1.distortion[3]);
 
   // T_{cam1<-cam0} = inv(T_BS1) * T_BS0
   Eigen::Matrix4d T_rel = ccfg.T_BS1.inverse() * ccfg.T_BS0;
@@ -35,10 +38,8 @@ void StereoRectifier::init(const CameraConfig &ccfg) {
   cv::stereoRectify(K0, D0, K1, D1, imgSize, R_cv, T_cv, R1, R2, P1, P2, Q,
                     cv::CALIB_ZERO_DISPARITY, 0.0, imgSize);
 
-  cv::initUndistortRectifyMap(K0, D0, R1, P1, imgSize, CV_32FC1, map1_left_,
-                              map2_left_);
-  cv::initUndistortRectifyMap(K1, D1, R2, P2, imgSize, CV_32FC1, map1_right_,
-                              map2_right_);
+  cv::initUndistortRectifyMap(K0, D0, R1, P1, imgSize, CV_32FC1, map1_left_, map2_left_);
+  cv::initUndistortRectifyMap(K1, D1, R2, P2, imgSize, CV_32FC1, map1_right_, map2_right_);
 
   // Store R1 for T_cam_imu correction
   for (int r = 0; r < 3; ++r)
@@ -52,22 +53,19 @@ void StereoRectifier::init(const CameraConfig &ccfg) {
   cy_ = P1.at<double>(1, 2);
   baseline_ = std::abs(P2.at<double>(0, 3)) / f_rect;
 
-  get_logger()->info(
-      "Rectify: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.4f}m",
-      fx_, fy_, cx_, cy_, baseline_);
+  get_logger()->info("Rectify: fx={:.1f} fy={:.1f} cx={:.1f} cy={:.1f} baseline={:.4f}m", fx_, fy_,
+                     cx_, cy_, baseline_);
 }
 
-void StereoRectifier::rectify(const cv::Mat &raw_left,
-                               const cv::Mat &raw_right, cv::Mat &rect_left,
-                               cv::Mat &rect_right) const {
+void StereoRectifier::rectify(const cv::Mat& raw_left, const cv::Mat& raw_right, cv::Mat& rect_left,
+                              cv::Mat& rect_right) const {
   cv::remap(raw_left, rect_left, map1_left_, map2_left_, cv::INTER_LINEAR);
   cv::remap(raw_right, rect_right, map1_right_, map2_right_, cv::INTER_LINEAR);
 }
 
 // ── Factory helpers ──────────────────────────────────────────
 
-StereoCamera makeStereoCamera(const StereoRectifier &rect,
-                               const CameraConfig &ccfg) {
+StereoCamera makeStereoCamera(const StereoRectifier& rect, const CameraConfig& ccfg) {
   StereoCamera cam;
   cam.fx = rect.fx();
   cam.fy = rect.fy();
@@ -83,7 +81,7 @@ StereoCamera makeStereoCamera(const StereoRectifier &rect,
   return cam;
 }
 
-StereoCamera makeStereoCamera(const StereoRectifier &rect) {
+StereoCamera makeStereoCamera(const StereoRectifier& rect) {
   StereoCamera cam;
   cam.fx = rect.fx();
   cam.fy = rect.fy();
@@ -94,4 +92,4 @@ StereoCamera makeStereoCamera(const StereoRectifier &rect) {
   return cam;
 }
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

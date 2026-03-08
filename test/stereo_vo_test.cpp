@@ -1,9 +1,12 @@
-#include <gtest/gtest.h>
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/stereo_vo.hpp"
+
 #include "ekf_vio/types.hpp"
 
 #include <cmath>
+#include <gtest/gtest.h>
 #include <random>
 
 namespace {
@@ -23,8 +26,8 @@ ekf_vio::StereoCamera makeCamera() {
 }
 
 // Project a 3-D point in the left-camera frame to stereo pixel pair
-void project(const ekf_vio::StereoCamera &cam, const Eigen::Vector3d &p,
-             double &u_l, double &v_l, double &u_r, double &v_r) {
+void project(const ekf_vio::StereoCamera& cam, const Eigen::Vector3d& p, double& u_l, double& v_l,
+             double& u_r, double& v_r) {
   const double inv_z = 1.0 / p.z();
   u_l = cam.fx * p.x() * inv_z + cam.cx;
   v_l = cam.fy * p.y() * inv_z + cam.cy;
@@ -33,8 +36,7 @@ void project(const ekf_vio::StereoCamera &cam, const Eigen::Vector3d &p,
 }
 
 // Generate a grid of 3-D landmarks at various depths
-std::vector<Eigen::Vector3d> makeLandmarks(int n, double z_near, double z_far,
-                                           unsigned seed = 42) {
+std::vector<Eigen::Vector3d> makeLandmarks(int n, double z_near, double z_far, unsigned seed = 42) {
   std::mt19937 rng(seed);
   std::uniform_real_distribution<double> dz(z_near, z_far);
   std::uniform_real_distribution<double> dx(-1.5, 1.5);
@@ -47,21 +49,18 @@ std::vector<Eigen::Vector3d> makeLandmarks(int n, double z_near, double z_far,
 }
 
 // Build Features from 3-D points in camera frame (with id starting at base_id)
-std::vector<ekf_vio::Feature> buildFeatures(
-    const ekf_vio::StereoCamera &cam,
-    const std::vector<Eigen::Vector3d> &pts_cam,
-    int base_id = 0) {
+std::vector<ekf_vio::Feature> buildFeatures(const ekf_vio::StereoCamera& cam,
+                                            const std::vector<Eigen::Vector3d>& pts_cam,
+                                            int base_id = 0) {
   std::vector<ekf_vio::Feature> features;
   for (int i = 0; i < static_cast<int>(pts_cam.size()); ++i) {
-    const auto &pc = pts_cam[i];
-    if (pc.z() < 0.2 || pc.z() > 30.0)
-      continue;
+    const auto& pc = pts_cam[i];
+    if (pc.z() < 0.2 || pc.z() > 30.0) continue;
     ekf_vio::Feature f;
     f.id = base_id + i;
     project(cam, pc, f.u_l, f.v_l, f.u_r, f.v_r);
     // Skip points that project outside image
-    if (f.u_l < 0 || f.u_l > 640 || f.v_l < 0 || f.v_l > 480)
-      continue;
+    if (f.u_l < 0 || f.u_l > 640 || f.v_l < 0 || f.v_l > 480) continue;
     f.p_c = pc;
     features.push_back(f);
   }
@@ -69,20 +68,20 @@ std::vector<ekf_vio::Feature> buildFeatures(
 }
 
 // Transform a set of 3-D points by an Isometry
-std::vector<Eigen::Vector3d> transform(
-    const Eigen::Isometry3d &T,
-    const std::vector<Eigen::Vector3d> &pts) {
+std::vector<Eigen::Vector3d> transform(const Eigen::Isometry3d& T,
+                                       const std::vector<Eigen::Vector3d>& pts) {
   std::vector<Eigen::Vector3d> out;
   out.reserve(pts.size());
-  for (const auto &p : pts) out.push_back(T * p);
+  for (const auto& p : pts)
+    out.push_back(T * p);
   return out;
 }
 
-double translationError(const Eigen::Isometry3d &a, const Eigen::Isometry3d &b) {
+double translationError(const Eigen::Isometry3d& a, const Eigen::Isometry3d& b) {
   return (a.translation() - b.translation()).norm();
 }
 
-double rotationErrorDeg(const Eigen::Isometry3d &a, const Eigen::Isometry3d &b) {
+double rotationErrorDeg(const Eigen::Isometry3d& a, const Eigen::Isometry3d& b) {
   const Eigen::Matrix3d dR = a.rotation().transpose() * b.rotation();
   const double cos_angle = std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0);
   return std::acos(cos_angle) * 180.0 / M_PI;
@@ -156,7 +155,7 @@ TEST(StereoVOTest, RecoversKnownTranslation) {
   auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
   auto feat1 = buildFeatures(cam, lm_cam1);
   // Keep same IDs as feat0
-  for (auto &f : feat1) {
+  for (auto& f : feat1) {
     // The id in buildFeatures is base_id + i, so IDs match if we use same base
     // This works because both calls use base_id=0 and same landmark order
   }
@@ -335,4 +334,3 @@ TEST(StereoVOTest, SetInitialPose) {
 
   EXPECT_NEAR(translationError(vo.pose(), T_init), 0.0, 1e-12);
 }
-

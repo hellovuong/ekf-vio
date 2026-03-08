@@ -1,21 +1,10 @@
-/**
- * /workspace/src/ekf-vio/include/ekf_vio/ekf.hpp
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
 
 #pragma once
 
 #include "ekf_vio/types.hpp"
+
 #include <unordered_map>
 #include <vector>
 
@@ -31,30 +20,30 @@ namespace ekf_vio {
 //           Measurement Jacobian H computed analytically
 // ===========================================================================
 class EKF {
-public:
+ public:
   // Process noise parameters (tune these!)
   struct NoiseParams {
-    double sigma_gyro = 1.6968e-4;       // rad/s/√Hz
-    double sigma_accel = 2.0000e-3;      // m/s²/√Hz
-    double sigma_gyro_bias = 1.9393e-5;  // rad/s²/√Hz
-    double sigma_accel_bias = 3.0000e-5; // m/s³/√Hz
-    double sigma_pixel = 1.5;            // pixels (reprojection noise)
-    int landmark_max_age = 5;            // keep landmarks for N frames after last observation
+    double sigma_gyro = 1.6968e-4;        // rad/s/√Hz
+    double sigma_accel = 2.0000e-3;       // m/s²/√Hz
+    double sigma_gyro_bias = 1.9393e-5;   // rad/s²/√Hz
+    double sigma_accel_bias = 3.0000e-5;  // m/s³/√Hz
+    double sigma_pixel = 1.5;             // pixels (reprojection noise)
+    int landmark_max_age = 5;             // keep landmarks for N frames after last observation
   };
 
-  explicit EKF(const StereoCamera &cam, const NoiseParams &noise);
+  explicit EKF(const StereoCamera& cam, const NoiseParams& noise);
 
   // -----------------------------------------------------------------------
   // Propagate state using IMU measurement over interval dt [seconds]
   // Call this for every IMU sample (~200 Hz)
   // -----------------------------------------------------------------------
-  void predict(const ImuData &imu, double dt);
+  void predict(const ImuData& imu, double dt);
 
   // -----------------------------------------------------------------------
   // Update state using a set of triangulated stereo features
   // Call this for every camera frame (~30 Hz)
   // -----------------------------------------------------------------------
-  void update(const std::vector<Feature> &features);
+  void update(const std::vector<Feature>& features);
 
   // -----------------------------------------------------------------------
   // Update state using an external 6-DOF pose measurement (e.g. from VO).
@@ -63,15 +52,14 @@ public:
   //   sigma_p: position measurement noise std-dev (metres)
   //   sigma_q: orientation measurement noise std-dev (radians)
   // -----------------------------------------------------------------------
-  void updateFromPose(const Eigen::Vector3d &p_meas,
-                      const Eigen::Quaterniond &q_meas,
+  void updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond& q_meas,
                       double sigma_p, double sigma_q);
 
   // Accessors
-  const State &state() const { return state_; }
-  State &state() { return state_; }
+  const State& state() const { return state_; }
+  State& state() { return state_; }
 
-private:
+ private:
   // -----------------------------------------------------------------------
   // IMU Integration (RK4 on position, velocity, quaternion)
   // Returns updated (p, v, q) — biases are held constant in predict step
@@ -80,9 +68,9 @@ private:
     Eigen::Vector3d p, v;
     Eigen::Quaterniond q;
   };
-  PVQ integrateRK4(const PVQ &pvq,
-                   const Eigen::Vector3d &omega_c, // corrected gyro
-                   const Eigen::Vector3d &a_c,     // corrected accel
+  PVQ integrateRK4(const PVQ& pvq,
+                   const Eigen::Vector3d& omega_c,  // corrected gyro
+                   const Eigen::Vector3d& a_c,      // corrected accel
                    double dt) const;
 
   // -----------------------------------------------------------------------
@@ -93,21 +81,20 @@ private:
   //   Phi  = I + F*dt  (first-order, sufficient at high IMU rates)
   //   Q_d  = G * Q_c * G^T * dt
   // -----------------------------------------------------------------------
-  void computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
-                 Eigen::Matrix<double, 15, 15> &F,
-                 Eigen::Matrix<double, 15, 12> &G) const;
+  void computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                 Eigen::Matrix<double, 15, 15>& F, Eigen::Matrix<double, 15, 12>& G) const;
 
   // -----------------------------------------------------------------------
   // Project a 3-D point in camera frame to (left, right) pixel pairs
   // -----------------------------------------------------------------------
-  void project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
-               double &u_r, double &v_r) const;
+  void project(const Eigen::Vector3d& p_c, double& u_l, double& v_l, double& u_r,
+               double& v_r) const;
 
   // Transform a 3-D point from camera frame to world frame using current state
-  Eigen::Vector3d camToWorld(const Eigen::Vector3d &p_c) const;
+  Eigen::Vector3d camToWorld(const Eigen::Vector3d& p_c) const;
 
   // Transform a 3-D point from world frame to camera frame using current state
-  Eigen::Vector3d worldToCam(const Eigen::Vector3d &p_w) const;
+  Eigen::Vector3d worldToCam(const Eigen::Vector3d& p_w) const;
 
   State state_;
   StereoCamera cam_;
@@ -122,4 +109,4 @@ private:
   int frame_count_ = 0;
 };
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

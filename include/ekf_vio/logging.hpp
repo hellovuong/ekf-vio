@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 /**
  * ekf_vio/logging.hpp — Thin spdlog wrapper for the ekf-vio project.
  *
@@ -11,8 +14,8 @@
  */
 #pragma once
 
-#include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/spdlog.h>
 
 #include <memory>
 
@@ -39,4 +42,4 @@ inline std::shared_ptr<spdlog::logger> get_logger() {
   return logger;
 }
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

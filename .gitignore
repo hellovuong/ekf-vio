@@ -1,2 +1,40 @@
-/.cache/clangd/index
-/compile_commands.json
+# Build artifacts
+build/
+install/
+log/
+compile_commands.json
+
+# IDE / editor caches
+.cache/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Colcon / ROS 2
+log/
+install/
+build/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Secrets & environment
+.env
+.env.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# ccache
+ccache/
+
+# Output files
+*.csv
+!config/**/*.csv
+results/

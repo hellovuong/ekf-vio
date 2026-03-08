@@ -1,10 +1,13 @@
-#include <gtest/gtest.h>
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
+
 #include "ekf_vio/math_utils.hpp"
 #include "ekf_vio/types.hpp"
 
 #include <cmath>
+#include <gtest/gtest.h>
 #include <random>
 
 namespace {
@@ -21,9 +24,7 @@ ekf_vio::StereoCamera makeCamera() {
   cam.baseline = 0.11;
   // Non-trivial cam-imu extrinsic: 90° rotation about Z
   Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) =
-      Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ())
-          .toRotationMatrix();
+  T.block<3, 3>(0, 0) = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
   T.block<3, 1>(0, 3) = Eigen::Vector3d(0.05, -0.02, 0.01);
   cam.T_cam_imu = Eigen::Isometry3d(T);
   return cam;
@@ -41,11 +42,10 @@ ekf_vio::EKF::NoiseParams defaultNoise() {
 
 // Build synthetic features visible from a given camera pose
 // (landmarks placed randomly in front of the camera)
-std::vector<ekf_vio::Feature> makeSyntheticFeatures(
-    const ekf_vio::StereoCamera &cam,
-    const Eigen::Vector3d &p_body,
-    const Eigen::Quaterniond &q_wb,
-    int count, int base_id = 0, unsigned seed = 42) {
+std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera& cam,
+                                                    const Eigen::Vector3d& p_body,
+                                                    const Eigen::Quaterniond& q_wb, int count,
+                                                    int base_id = 0, unsigned seed = 42) {
   const Eigen::Matrix3d R_ci = cam.T_cam_imu.rotation();
   const Eigen::Vector3d t_ci = cam.T_cam_imu.translation();
   const Eigen::Matrix3d R_wb = q_wb.toRotationMatrix();
@@ -101,7 +101,7 @@ TEST(EKFTest, StationaryIMUKeepsPosition) {
   imu.gyro = Eigen::Vector3d::Zero();
   imu.accel = Eigen::Vector3d(0.0, 0.0, 9.81);  // opposing gravity
 
-  const double dt = 0.005;  // 200 Hz
+  const double dt = 0.005;          // 200 Hz
   for (int i = 0; i < 2000; ++i) {  // 10 seconds
     imu.timestamp = i * dt;
     ekf.predict(imu, dt);
@@ -175,12 +175,10 @@ TEST(EKFTest, ConstantAngularVelocity) {
   // Expected: 10° yaw
   const double expected_yaw = omega_z * T;
   const Eigen::Matrix3d R_expected =
-      Eigen::AngleAxisd(expected_yaw, Eigen::Vector3d::UnitZ())
-          .toRotationMatrix();
+      Eigen::AngleAxisd(expected_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
   const Eigen::Matrix3d R_actual = ekf.state().q.toRotationMatrix();
   const Eigen::Matrix3d dR = R_expected.transpose() * R_actual;
-  const double angle_err =
-      std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
+  const double angle_err = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
   EXPECT_NEAR(angle_err * 180.0 / M_PI, 0.0, 0.1);  // < 0.1°
 }
 
@@ -218,8 +216,7 @@ TEST(EKFTest, CamWorldRoundTrip) {
 
   // Set non-trivial state
   ekf.state().p = Eigen::Vector3d(1.0, 2.0, 3.0);
-  ekf.state().q = Eigen::Quaterniond(
-      Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()));
+  ekf.state().q = Eigen::Quaterniond(Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()));
 
   // A point in camera frame
   Eigen::Vector3d p_c(0.5, -0.3, 4.0);
@@ -316,8 +313,8 @@ TEST(EKFTest, PoseUpdateCorrectsOrientationError) {
 
   // 5° yaw error
   ekf.state().p = Eigen::Vector3d::Zero();
-  ekf.state().q = Eigen::Quaterniond(
-      Eigen::AngleAxisd(5.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()));
+  ekf.state().q =
+      Eigen::Quaterniond(Eigen::AngleAxisd(5.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()));
   ekf.state().v = Eigen::Vector3d::Zero();
   ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-1;
 
@@ -325,10 +322,8 @@ TEST(EKFTest, PoseUpdateCorrectsOrientationError) {
 
   // Orientation error should reduce
   const Eigen::Matrix3d dR =
-      q_true.toRotationMatrix().transpose() *
-      ekf.state().q.toRotationMatrix();
-  const double angle_err =
-      std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
+      q_true.toRotationMatrix().transpose() * ekf.state().q.toRotationMatrix();
+  const double angle_err = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
   EXPECT_NEAR(angle_err * 180.0 / M_PI, 0.0, 1.0);  // < 1°
 }
 
@@ -345,8 +340,7 @@ TEST(EKFTest, MeasurementJacobianNumericalCheck) {
 
   // State
   const Eigen::Vector3d p(1.0, 0.5, 0.3);
-  const Eigen::Quaterniond q(
-      Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitY()));
+  const Eigen::Quaterniond q(Eigen::AngleAxisd(0.2, Eigen::Vector3d::UnitY()));
   const Eigen::Matrix3d R_wb = q.toRotationMatrix();
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
@@ -362,8 +356,7 @@ TEST(EKFTest, MeasurementJacobianNumericalCheck) {
   const double z_c = p_c.z();
   const double z_c2 = z_c * z_c;
   Eigen::Matrix<double, 2, 3> J_l;
-  J_l << cam.fx / z_c, 0.0, -cam.fx * p_c.x() / z_c2,
-         0.0, cam.fy / z_c, -cam.fy * p_c.y() / z_c2;
+  J_l << cam.fx / z_c, 0.0, -cam.fx * p_c.x() / z_c2, 0.0, cam.fy / z_c, -cam.fy * p_c.y() / z_c2;
   const Eigen::Matrix3d dp_c_dp = -R_cw;
   const Eigen::Matrix<double, 2, 3> H_p_analytic = J_l * dp_c_dp;
 
@@ -429,18 +422,13 @@ TEST(EKFTest, ExpLogSO3RoundTrip) {
 
   // Several rotation vectors
   std::vector<Eigen::Vector3d> omegas = {
-      {0.0, 0.0, 0.0},
-      {0.1, 0.0, 0.0},
-      {0.0, -0.2, 0.0},
-      {0.1, 0.2, -0.3},
-      {1.0, 0.5, -0.7},
+      {0.0, 0.0, 0.0}, {0.1, 0.0, 0.0}, {0.0, -0.2, 0.0}, {0.1, 0.2, -0.3}, {1.0, 0.5, -0.7},
   };
 
-  for (const auto &w : omegas) {
+  for (const auto& w : omegas) {
     const Eigen::Matrix3d R = expSO3(w);
     const Eigen::Vector3d w_back = logSO3(R);
-    EXPECT_NEAR((w - w_back).norm(), 0.0, 1e-10)
-        << "Failed for omega = " << w.transpose();
+    EXPECT_NEAR((w - w_back).norm(), 0.0, 1e-10) << "Failed for omega = " << w.transpose();
   }
 }
 
@@ -454,12 +442,9 @@ TEST(EKFTest, BoxplusAppliesBodyFrameRotation) {
   const Eigen::Vector3d dtheta(0.0, 0.0, 0.1);  // small Z rotation
 
   const Eigen::Quaterniond q_new = boxplus(q, dtheta);
-  const Eigen::Matrix3d R_expected =
-      Eigen::Matrix3d::Identity() * expSO3(dtheta);
-  const Eigen::Matrix3d dR =
-      R_expected.transpose() * q_new.toRotationMatrix();
-  const double angle =
-      std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
+  const Eigen::Matrix3d R_expected = Eigen::Matrix3d::Identity() * expSO3(dtheta);
+  const Eigen::Matrix3d dR = R_expected.transpose() * q_new.toRotationMatrix();
+  const double angle = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
   EXPECT_NEAR(angle, 0.0, 1e-10);
 }
 
@@ -490,7 +475,7 @@ TEST(EKFTest, CovarianceStaysSymmetric) {
     ekf.predict(imu, 0.005);
   }
 
-  const auto &P = ekf.state().P;
+  const auto& P = ekf.state().P;
   // Symmetry
   EXPECT_NEAR((P - P.transpose()).norm(), 0.0, 1e-12);
   // All eigenvalues >= 0

@@ -1,38 +1,25 @@
-/**
- * /workspace/src/ekf-vio/src/ekf.cpp
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 #include <ekf_vio/logging.hpp>
 #include <ekf_vio/math_utils.hpp>
+#include <numeric>
 
 namespace ekf_vio {
 
 using namespace math;
 
 // ---------------------------------------------------------------------------
-EKF::EKF(const StereoCamera &cam, const NoiseParams &noise)
-    : cam_(cam), noise_(noise) {}
+EKF::EKF(const StereoCamera& cam, const NoiseParams& noise) : cam_(cam), noise_(noise) {}
 
 // ---------------------------------------------------------------------------
 // PREDICT step
 // ---------------------------------------------------------------------------
-void EKF::predict(const ImuData &imu, double dt) {
+void EKF::predict(const ImuData& imu, double dt) {
   // 1. Bias-corrected measurements
   const Eigen::Vector3d omega_c = imu.gyro - state_.b_g;
   const Eigen::Vector3d a_c = imu.accel - state_.b_a;
@@ -50,19 +37,16 @@ void EKF::predict(const ImuData &imu, double dt) {
   computeFG(omega_c, a_c, F, G);
 
   // 4. Discretise  Phi ≈ I + F*dt,  Q_d = G * Q_c * G^T * dt
-  const Eigen::Matrix<double, 15, 15> Phi =
-      Eigen::Matrix<double, 15, 15>::Identity() + F * dt;
+  const Eigen::Matrix<double, 15, 15> Phi = Eigen::Matrix<double, 15, 15>::Identity() + F * dt;
 
   // Continuous noise spectral density diagonal
   Eigen::Matrix<double, 12, 12> Q_c = Eigen::Matrix<double, 12, 12>::Zero();
-  Q_c.block<3, 3>(0, 0) =
-      Eigen::Matrix3d::Identity() * (noise_.sigma_gyro * noise_.sigma_gyro);
-  Q_c.block<3, 3>(3, 3) =
-      Eigen::Matrix3d::Identity() * (noise_.sigma_accel * noise_.sigma_accel);
-  Q_c.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() *
-                          (noise_.sigma_gyro_bias * noise_.sigma_gyro_bias);
-  Q_c.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() *
-                          (noise_.sigma_accel_bias * noise_.sigma_accel_bias);
+  Q_c.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * (noise_.sigma_gyro * noise_.sigma_gyro);
+  Q_c.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * (noise_.sigma_accel * noise_.sigma_accel);
+  Q_c.block<3, 3>(6, 6) =
+      Eigen::Matrix3d::Identity() * (noise_.sigma_gyro_bias * noise_.sigma_gyro_bias);
+  Q_c.block<3, 3>(9, 9) =
+      Eigen::Matrix3d::Identity() * (noise_.sigma_accel_bias * noise_.sigma_accel_bias);
 
   const Eigen::Matrix<double, 15, 15> Q_d = G * Q_c * G.transpose() * dt;
 
@@ -76,15 +60,14 @@ void EKF::predict(const ImuData &imu, double dt) {
 // ---------------------------------------------------------------------------
 // UPDATE step — stereo reprojection against landmark map
 // ---------------------------------------------------------------------------
-void EKF::update(const std::vector<Feature> &features) {
-  if (features.empty())
-    return;
+void EKF::update(const std::vector<Feature>& features) {
+  if (features.empty()) return;
 
   ++frame_count_;
 
   // Precompute transforms
-  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix(); // body→world
-  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();   // imu→cam
+  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();  // body→world
+  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();    // imu→cam
   const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
   // World→camera: R_cw = R_ci * R_wb^T
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
@@ -94,7 +77,7 @@ void EKF::update(const std::vector<Feature> &features) {
   // ------------------------------------------------------------------
   std::vector<int> meas_indices;  // indices into features[] for measurement
   for (int i = 0; i < static_cast<int>(features.size()); ++i) {
-    const Feature &f = features[i];
+    const Feature& f = features[i];
     auto it = landmarks_.find(f.id);
     if (it == landmarks_.end()) {
       // New landmark: triangulate and store in world frame
@@ -121,15 +104,14 @@ void EKF::update(const std::vector<Feature> &features) {
   std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
 
   for (int k = 0; k < M; ++k) {
-    const Feature &f = features[meas_indices[k]];
-    const Eigen::Vector3d &p_w = landmarks_.at(f.id).p_w;
+    const Feature& f = features[meas_indices[k]];
+    const Eigen::Vector3d& p_w = landmarks_.at(f.id).p_w;
 
     // Predict camera-frame point from world landmark + current state
     const Eigen::Vector3d p_c_pred = worldToCam(p_w);
 
     // Skip landmarks behind the camera or too far
-    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0)
-      continue;
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
 
     // Predicted stereo projection
     double eu_l, ev_l, eu_r, ev_r;
@@ -148,14 +130,14 @@ void EKF::update(const std::vector<Feature> &features) {
 
     // ∂[u_l,v_l]/∂p_c
     Eigen::Matrix<double, 2, 3> J_l;
-    J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2,
-           0.0, cam_.fy / z_c, -cam_.fy * p_c_pred.y() / z_c2;
+    J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2, 0.0, cam_.fy / z_c,
+        -cam_.fy * p_c_pred.y() / z_c2;
 
     // ∂[u_r,v_r]/∂p_c  (right camera)
     Eigen::Matrix<double, 2, 3> J_r;
     // Horizontal stereo: u_r = fx*(X-b)/Z + cx,  v_r = fy*Y/Z + cy
-    J_r << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2,
-           0.0, cam_.fy / z_c, -cam_.fy * p_c_pred.y() / z_c2;
+    J_r << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2, 0.0, cam_.fy / z_c,
+        -cam_.fy * p_c_pred.y() / z_c2;
 
     // p_c = R_ci * R_wb^T * (p_w - p) + t_ci
     // ∂p_c/∂δp = -R_cw = -R_ci * R_wb^T
@@ -169,17 +151,16 @@ void EKF::update(const std::vector<Feature> &features) {
     // Stack into H (4×15)
     Eigen::Matrix<double, 4, 15> H_i;
     H_i.setZero();
-    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;      // position
+    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;  // position
     H_i.block<2, 3>(2, 0) = J_r * dp_c_dp;
-    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;   // orientation
+    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;  // orientation
     H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;
 
     // Mahalanobis gating: reject outliers using innovation covariance
     const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
     const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
     const double mahal = res.transpose() * S_i.inverse() * res;
-    if (mahal > chi2_thresh)
-      continue;
+    if (mahal > chi2_thresh) continue;
 
     residuals.push_back(res);
     jacobians.push_back(H_i);
@@ -192,7 +173,7 @@ void EKF::update(const std::vector<Feature> &features) {
     std::vector<int> idx(residuals.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::partial_sort(idx.begin(), idx.begin() + max_meas, idx.end(),
-        [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
+                      [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
     std::vector<Eigen::Vector4d> r2;
     std::vector<Eigen::Matrix<double, 4, 15>> j2;
     r2.reserve(max_meas);
@@ -229,7 +210,8 @@ void EKF::update(const std::vector<Feature> &features) {
     get_logger()->warn("EKF visual update: LDLT decomposition failed");
     return;
   }
-  const Eigen::MatrixXd K = state_.P * H_all.transpose() * S_ldlt.solve(Eigen::MatrixXd::Identity(4 * N, 4 * N));
+  const Eigen::MatrixXd K =
+      state_.P * H_all.transpose() * S_ldlt.solve(Eigen::MatrixXd::Identity(4 * N, 4 * N));
   const Eigen::VectorXd dx = K * z_all;
 
   // NaN check on dx
@@ -245,8 +227,7 @@ void EKF::update(const std::vector<Feature> &features) {
   state_.b_a += dx.segment<3>(12);
 
   // Joseph form
-  const Eigen::Matrix<double, 15, 15> IKH =
-      Eigen::Matrix<double, 15, 15>::Identity() - K * H_all;
+  const Eigen::Matrix<double, 15, 15> IKH = Eigen::Matrix<double, 15, 15>::Identity() - K * H_all;
   state_.P = IKH * state_.P * IKH.transpose() + K * R_mat * K.transpose();
   state_.P = 0.5 * (state_.P + state_.P.transpose());
 
@@ -265,7 +246,7 @@ void EKF::update(const std::vector<Feature> &features) {
   // re-observed later the residual encodes multi-frame drift, which
   // provides a stronger geometric constraint than frame-to-frame.
   // ------------------------------------------------------------------
-  for (const auto &f : features) {
+  for (const auto& f : features) {
     auto it = landmarks_.find(f.id);
     if (it != landmarks_.end() && f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
       it->second.p_w = camToWorld(f.p_c);
@@ -273,7 +254,7 @@ void EKF::update(const std::vector<Feature> &features) {
   }
 
   // Prune stale landmarks (age-based sliding window)
-  for (auto it = landmarks_.begin(); it != landmarks_.end(); ) {
+  for (auto it = landmarks_.begin(); it != landmarks_.end();) {
     if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age)
       it = landmarks_.erase(it);
     else
@@ -284,15 +265,13 @@ void EKF::update(const std::vector<Feature> &features) {
 // ---------------------------------------------------------------------------
 // UPDATE from external 6-DOF pose (loosely-coupled VO fusion)
 // ---------------------------------------------------------------------------
-void EKF::updateFromPose(const Eigen::Vector3d &p_meas,
-                         const Eigen::Quaterniond &q_meas,
+void EKF::updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond& q_meas,
                          double sigma_p, double sigma_q) {
   // Residual: [dp; dtheta]
   Eigen::Matrix<double, 6, 1> z;
   z.head<3>() = p_meas - state_.p;
   // Orientation error in body frame: dtheta such that R_meas = R_state * exp([dtheta]x)
-  z.tail<3>() = logSO3(state_.q.toRotationMatrix().transpose() *
-                        q_meas.toRotationMatrix());
+  z.tail<3>() = logSO3(state_.q.toRotationMatrix().transpose() * q_meas.toRotationMatrix());
 
   if (!z.allFinite()) {
     get_logger()->warn("EKF pose update: residual contains NaN — skipping");
@@ -337,8 +316,7 @@ void EKF::updateFromPose(const Eigen::Vector3d &p_meas,
   state_.b_a += dx.segment<3>(12);
 
   // Joseph form
-  const Eigen::Matrix<double, 15, 15> IKH =
-      Eigen::Matrix<double, 15, 15>::Identity() - K * H;
+  const Eigen::Matrix<double, 15, 15> IKH = Eigen::Matrix<double, 15, 15>::Identity() - K * H;
   state_.P = IKH * state_.P * IKH.transpose() + K * R * K.transpose();
   state_.P = 0.5 * (state_.P + state_.P.transpose());
 }
@@ -346,15 +324,14 @@ void EKF::updateFromPose(const Eigen::Vector3d &p_meas,
 // ---------------------------------------------------------------------------
 // RK4 IMU integration
 // ---------------------------------------------------------------------------
-EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
-                           const Eigen::Vector3d &a_c, double dt) const {
+EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
+                           const Eigen::Vector3d& a_c, double dt) const {
   const Eigen::Vector3d g = gravity();
   // Derivative function: given state, return (ṗ, v̇, q̇ axis-angle)
-  auto deriv = [&](const PVQ &s) -> PVQ {
+  auto deriv = [&](const PVQ& s) -> PVQ {
     const Eigen::Matrix3d R = s.q.toRotationMatrix();
     return {s.v, R * a_c + g,
-            Eigen::Quaterniond(0.0, 0.5 * omega_c.x(), 0.5 * omega_c.y(),
-                               0.5 * omega_c.z())};
+            Eigen::Quaterniond(0.0, 0.5 * omega_c.x(), 0.5 * omega_c.y(), 0.5 * omega_c.z())};
     // Note: q̇ = 0.5 * q ⊗ [0, ω].  We encode the ω part here; multiply below.
   };
 
@@ -400,9 +377,8 @@ EKF::PVQ EKF::integrateRK4(const PVQ &pvq, const Eigen::Vector3d &omega_c,
 //  θ̇  =  ω_c             →  ∂θ̇/∂δθ = -[ω_c]×,   ∂θ̇/∂δb_g = -I
 //  ḃ_g = 0,  ḃ_a = 0
 // ---------------------------------------------------------------------------
-void EKF::computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
-                    Eigen::Matrix<double, 15, 15> &F,
-                    Eigen::Matrix<double, 15, 12> &G) const {
+void EKF::computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                    Eigen::Matrix<double, 15, 15>& F, Eigen::Matrix<double, 15, 12>& G) const {
   F.setZero();
   G.setZero();
 
@@ -411,25 +387,25 @@ void EKF::computeFG(const Eigen::Vector3d &omega_c, const Eigen::Vector3d &a_c,
   // ṗ = v
   F.block<3, 3>(0, 3) = Eigen::Matrix3d::Identity();
   // v̇ = R*a_c + g  (wrt error state)
-  F.block<3, 3>(3, 6) = -R * skew(a_c); // ∂/∂δθ
-  F.block<3, 3>(3, 12) = -R;            // ∂/∂δb_a
+  F.block<3, 3>(3, 6) = -R * skew(a_c);  // ∂/∂δθ
+  F.block<3, 3>(3, 12) = -R;             // ∂/∂δb_a
   // θ̇ = ω_c
-  F.block<3, 3>(6, 6) = -skew(omega_c);               // ∂/∂δθ
-  F.block<3, 3>(6, 9) = -Eigen::Matrix3d::Identity(); // ∂/∂δb_g
+  F.block<3, 3>(6, 6) = -skew(omega_c);                // ∂/∂δθ
+  F.block<3, 3>(6, 9) = -Eigen::Matrix3d::Identity();  // ∂/∂δb_g
 
   // Noise input matrix G (maps 12-dim noise → 15-dim error state)
   //  n = [n_g, n_a, n_bg, n_ba]
-  G.block<3, 3>(3, 3) = -R; // accel noise → velocity
-  G.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity(); // gyro noise → angle
-  G.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity();  // gyro bias noise
-  G.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity(); // accel bias noise
+  G.block<3, 3>(3, 3) = -R;                            // accel noise → velocity
+  G.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity();  // gyro noise → angle
+  G.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity();   // gyro bias noise
+  G.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity();  // accel bias noise
 }
 
 // ---------------------------------------------------------------------------
 // Project 3-D point in left camera frame to stereo pixel pair
 // ---------------------------------------------------------------------------
-void EKF::project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
-                  double &u_r, double &v_r) const {
+void EKF::project(const Eigen::Vector3d& p_c, double& u_l, double& v_l, double& u_r,
+                  double& v_r) const {
   const double inv_z = 1.0 / p_c.z();
   u_l = cam_.fx * p_c.x() * inv_z + cam_.cx;
   v_l = cam_.fy * p_c.y() * inv_z + cam_.cy;
@@ -449,7 +425,7 @@ void EKF::project(const Eigen::Vector3d &p_c, double &u_l, double &v_l,
 //   world→cam:  p_imu = R_wb^T * (p_w - p)
 //               p_c   = R_ci * p_imu + t_ci
 // ---------------------------------------------------------------------------
-Eigen::Vector3d EKF::camToWorld(const Eigen::Vector3d &p_c) const {
+Eigen::Vector3d EKF::camToWorld(const Eigen::Vector3d& p_c) const {
   const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
   const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
   const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
@@ -457,7 +433,7 @@ Eigen::Vector3d EKF::camToWorld(const Eigen::Vector3d &p_c) const {
   return R_wb * p_imu + state_.p;
 }
 
-Eigen::Vector3d EKF::worldToCam(const Eigen::Vector3d &p_w) const {
+Eigen::Vector3d EKF::worldToCam(const Eigen::Vector3d& p_w) const {
   const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
   const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
   const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
@@ -465,4 +441,4 @@ Eigen::Vector3d EKF::worldToCam(const Eigen::Vector3d &p_w) const {
   return R_ci * p_imu + t_ci;
 }
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

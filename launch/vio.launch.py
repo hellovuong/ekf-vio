@@ -1,3 +1,6 @@
+# Copyright (c) 2026, Long Vuong
+# SPDX-License-Identifier: BSD-3-Clause
+
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution

@@ -6,7 +6,7 @@
   <version>0.1.0</version>
   <description>EKF-based Visual-Inertial Odometry (stereo + 6-DOF IMU)</description>
   <maintainer email="longvuonghathe@gmail.com">Long Vuong</maintainer>
-  <license>MIT</license>
+  <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

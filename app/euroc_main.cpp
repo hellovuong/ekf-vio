@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 // ============================================================================
 //  Standalone EuRoC dataset runner for EKF-VIO
 //
@@ -16,7 +19,7 @@
 
 using namespace ekf_vio;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   init_logging(spdlog::level::info);
   auto log = get_logger();
 
@@ -31,7 +34,7 @@ int main(int argc, char **argv) {
   try {
     cfg = loadConfig(config_path);
     log->info("Loaded config from: {}", config_path);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     log->error("Failed to load config '{}': {}", config_path, e.what());
     return 1;
   }
@@ -61,7 +64,7 @@ int main(int argc, char **argv) {
 
   // Replay dataset
   reader.replay(
-      [&](const ImuData &imu) {
+      [&](const ImuData& imu) {
         if (!initialized) {
           last_imu_time = imu.timestamp;
           return;
@@ -75,9 +78,8 @@ int main(int argc, char **argv) {
         last_imu_time = imu.timestamp;
       },
 
-      [&](const StereoImages &stereo) {
-        if (stereo.left.empty() || stereo.right.empty())
-          return;
+      [&](const StereoImages& stereo) {
+        if (stereo.left.empty() || stereo.right.empty()) return;
 
         if (!initialized) {
           GroundTruth gt;
@@ -95,18 +97,13 @@ int main(int argc, char **argv) {
             log->info("No ground truth; starting at identity");
           }
 
-          const auto &ic = cfg.initial_covariance;
+          const auto& ic = cfg.initial_covariance;
           ekf.state().P.setZero();
-          ekf.state().P.block<3, 3>(0, 0) =
-              Eigen::Matrix3d::Identity() * ic.position;
-          ekf.state().P.block<3, 3>(3, 3) =
-              Eigen::Matrix3d::Identity() * ic.velocity;
-          ekf.state().P.block<3, 3>(6, 6) =
-              Eigen::Matrix3d::Identity() * ic.orientation;
-          ekf.state().P.block<3, 3>(9, 9) =
-              Eigen::Matrix3d::Identity() * ic.gyro_bias;
-          ekf.state().P.block<3, 3>(12, 12) =
-              Eigen::Matrix3d::Identity() * ic.accel_bias;
+          ekf.state().P.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * ic.position;
+          ekf.state().P.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * ic.velocity;
+          ekf.state().P.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * ic.orientation;
+          ekf.state().P.block<3, 3>(9, 9) = Eigen::Matrix3d::Identity() * ic.gyro_bias;
+          ekf.state().P.block<3, 3>(12, 12) = Eigen::Matrix3d::Identity() * ic.accel_bias;
           initialized = true;
           last_imu_time = stereo.timestamp;
           return;
@@ -116,28 +113,23 @@ int main(int argc, char **argv) {
         rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
         const auto features = tracker.track(rect_left, rect_right);
 
-        if (!features.empty())
-          ekf.update(features);
+        if (!features.empty()) ekf.update(features);
 
         ++stereo_count;
-        const State &s = ekf.state();
-        traj_out << std::fixed << std::setprecision(9) << stereo.timestamp
-                 << "," << s.p.x() << "," << s.p.y() << "," << s.p.z() << ","
-                 << s.q.w() << "," << s.q.x() << "," << s.q.y() << ","
-                 << s.q.z() << "\n";
+        const State& s = ekf.state();
+        traj_out << std::fixed << std::setprecision(9) << stereo.timestamp << "," << s.p.x() << ","
+                 << s.p.y() << "," << s.p.z() << "," << s.q.w() << "," << s.q.x() << "," << s.q.y()
+                 << "," << s.q.z() << "\n";
 
         if (stereo_count % 100 == 0) {
-          log->info(
-              "Frame {:4d}  t={:.3f}  feat={}  pos=({:.3f}, {:.3f}, {:.3f})",
-              stereo_count, stereo.timestamp, features.size(), s.p.x(),
-              s.p.y(), s.p.z());
+          log->info("Frame {:4d}  t={:.3f}  feat={}  pos=({:.3f}, {:.3f}, {:.3f})", stereo_count,
+                    stereo.timestamp, features.size(), s.p.x(), s.p.y(), s.p.z());
         }
       });
 
-  const State &s = ekf.state();
+  const State& s = ekf.state();
   log->info("=== Done ===");
-  log->info("Processed {} stereo frames, {} IMU samples", stereo_count,
-            reader.numImu());
+  log->info("Processed {} stereo frames, {} IMU samples", stereo_count, reader.numImu());
   log->info("Final pos: ({:.3f}, {:.3f}, {:.3f})", s.p.x(), s.p.y(), s.p.z());
   log->info("Trajectory saved to euroc_traj.csv");
   return 0;

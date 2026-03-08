@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 // ============================================================================
 //  Standalone EuRoC dataset runner for Keyframe-based Stereo VO (no IMU)
 //
@@ -16,7 +19,7 @@
 
 using namespace ekf_vio;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   init_logging(spdlog::level::info);
   auto log = get_logger();
 
@@ -31,7 +34,7 @@ int main(int argc, char **argv) {
   try {
     cfg = loadConfig(config_path);
     log->info("Loaded config from: {}", config_path);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     log->error("Failed to load config '{}': {}", config_path, e.what());
     return 1;
   }
@@ -59,43 +62,40 @@ int main(int argc, char **argv) {
   traj_out << "# timestamp,px,py,pz,qw,qx,qy,qz\n";
 
   // Replay — only process stereo frames (ignore IMU)
-  reader.replay(
-      [](const ImuData &) {},
+  reader.replay([](const ImuData&) {},
 
-      [&](const StereoImages &stereo) {
-        if (stereo.left.empty() || stereo.right.empty())
-          return;
+                [&](const StereoImages& stereo) {
+                  if (stereo.left.empty() || stereo.right.empty()) return;
 
-        if (frame_count == 0 && !have_gt) {
-          GroundTruth gt;
-          if (reader.closestGroundTruth(stereo.timestamp, gt)) {
-            // GT available for evaluation alignment — VO starts at identity
-          }
-          have_gt = true;
-        }
+                  if (frame_count == 0 && !have_gt) {
+                    GroundTruth gt;
+                    if (reader.closestGroundTruth(stereo.timestamp, gt)) {
+                      // GT available for evaluation alignment — VO starts at identity
+                    }
+                    have_gt = true;
+                  }
 
-        cv::Mat rect_left, rect_right;
-        rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
-        const auto features = tracker.track(rect_left, rect_right);
-        Eigen::Isometry3d T_wc = vo.process(features);
+                  cv::Mat rect_left, rect_right;
+                  rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
+                  const auto features = tracker.track(rect_left, rect_right);
+                  Eigen::Isometry3d T_wc = vo.process(features);
 
-        ++frame_count;
-        const Eigen::Vector3d p = T_wc.translation();
-        const Eigen::Quaterniond q(T_wc.rotation());
+                  ++frame_count;
+                  const Eigen::Vector3d p = T_wc.translation();
+                  const Eigen::Quaterniond q(T_wc.rotation());
 
-        traj_out << std::fixed << std::setprecision(9) << stereo.timestamp
-                 << "," << p.x() << "," << p.y() << "," << p.z() << ","
-                 << q.w() << "," << q.x() << "," << q.y() << "," << q.z()
-                 << "\n";
+                  traj_out << std::fixed << std::setprecision(9) << stereo.timestamp << "," << p.x()
+                           << "," << p.y() << "," << p.z() << "," << q.w() << "," << q.x() << ","
+                           << q.y() << "," << q.z() << "\n";
 
-        if (frame_count % 100 == 0) {
-          log->info("Frame {:4d}  t={:.3f}  feat={}  inliers={}  kf_lm={}"
-                    "  pos=({:.3f}, {:.3f}, {:.3f})",
-                    frame_count, stereo.timestamp, features.size(),
-                    vo.numInliers(), vo.numKeyframeLandmarks(), p.x(), p.y(),
-                    p.z());
-        }
-      });
+                  if (frame_count % 100 == 0) {
+                    log->info(
+                        "Frame {:4d}  t={:.3f}  feat={}  inliers={}  kf_lm={}"
+                        "  pos=({:.3f}, {:.3f}, {:.3f})",
+                        frame_count, stereo.timestamp, features.size(), vo.numInliers(),
+                        vo.numKeyframeLandmarks(), p.x(), p.y(), p.z());
+                  }
+                });
 
   const Eigen::Vector3d p = vo.pose().translation();
   log->info("=== Done ===");

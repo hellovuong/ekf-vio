@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 /**
  * ekf_vio/config.hpp — YAML configuration loader for EKF-VIO.
  *
@@ -11,9 +14,10 @@
 #include "ekf_vio/stereo_vo.hpp"
 
 #include <Eigen/Dense>
+#include <yaml-cpp/yaml.h>
+
 #include <string>
 #include <vector>
-#include <yaml-cpp/yaml.h>
 
 namespace ekf_vio {
 
@@ -88,7 +92,7 @@ struct Config {
 
 namespace detail {
 
-inline CameraIntrinsics loadIntrinsics(const YAML::Node &n) {
+inline CameraIntrinsics loadIntrinsics(const YAML::Node& n) {
   CameraIntrinsics ci;
   ci.fx = n["fx"].as<double>();
   ci.fy = n["fy"].as<double>();
@@ -98,7 +102,7 @@ inline CameraIntrinsics loadIntrinsics(const YAML::Node &n) {
   return ci;
 }
 
-inline Eigen::Matrix4d loadMatrix4d(const YAML::Node &n) {
+inline Eigen::Matrix4d loadMatrix4d(const YAML::Node& n) {
   auto v = n.as<std::vector<double>>();
   Eigen::Matrix4d M;
   for (int i = 0; i < 16; ++i)
@@ -106,16 +110,16 @@ inline Eigen::Matrix4d loadMatrix4d(const YAML::Node &n) {
   return M;
 }
 
-} // namespace detail
+}  // namespace detail
 
 // ── Main loader ──────────────────────────────────────────────
 
-inline Config loadConfig(const std::string &path) {
+inline Config loadConfig(const std::string& path) {
   YAML::Node root = YAML::LoadFile(path);
   Config cfg;
 
   // Camera
-  const auto &cam = root["camera"];
+  const auto& cam = root["camera"];
   cfg.camera.image_width = cam["image_width"].as<int>();
   cfg.camera.image_height = cam["image_height"].as<int>();
   cfg.camera.cam0 = detail::loadIntrinsics(cam["cam0"]);
@@ -124,7 +128,7 @@ inline Config loadConfig(const std::string &path) {
   cfg.camera.T_BS1 = detail::loadMatrix4d(cam["T_BS1"]);
 
   // IMU
-  const auto &imu = root["imu"];
+  const auto& imu = root["imu"];
   cfg.imu.noise_gyro = imu["noise_gyro"].as<double>();
   cfg.imu.noise_accel = imu["noise_accel"].as<double>();
   cfg.imu.gyro_walk = imu["gyro_walk"].as<double>();
@@ -132,15 +136,14 @@ inline Config loadConfig(const std::string &path) {
   cfg.imu.frequency = imu["frequency"].as<double>();
 
   // EKF
-  const auto &ekf = root["ekf"];
+  const auto& ekf = root["ekf"];
   cfg.ekf.sigma_pixel = ekf["sigma_pixel"].as<double>();
   cfg.ekf.vo_position_noise = ekf["vo_position_noise"].as<double>();
   cfg.ekf.vo_orientation_noise = ekf["vo_orientation_noise"].as<double>();
-  if (ekf["landmark_max_age"])
-    cfg.ekf.landmark_max_age = ekf["landmark_max_age"].as<int>();
+  if (ekf["landmark_max_age"]) cfg.ekf.landmark_max_age = ekf["landmark_max_age"].as<int>();
 
   // Tracker
-  const auto &tr = root["tracker"];
+  const auto& tr = root["tracker"];
   cfg.tracker.max_features = tr["max_features"].as<int>();
   cfg.tracker.fast_threshold = tr["fast_threshold"].as<int>();
   cfg.tracker.lk_win_size = tr["lk_win_size"].as<int>();
@@ -150,7 +153,7 @@ inline Config loadConfig(const std::string &path) {
   cfg.tracker.ransac_thresh_px = tr["ransac_thresh_px"].as<double>();
 
   // VO
-  const auto &vo = root["vo"];
+  const auto& vo = root["vo"];
   cfg.vo.min_pnp_points = vo["min_pnp_points"].as<int>();
   cfg.vo.pnp_reproj_thresh = vo["pnp_reproj_thresh"].as<double>();
   cfg.vo.kf_tracked_ratio = vo["kf_tracked_ratio"].as<double>();
@@ -159,7 +162,7 @@ inline Config loadConfig(const std::string &path) {
   cfg.vo.max_rotation_deg = vo["max_rotation_deg"].as<double>();
 
   // Initial covariance
-  const auto &ic = root["initial_covariance"];
+  const auto& ic = root["initial_covariance"];
   cfg.initial_covariance.position = ic["position"].as<double>();
   cfg.initial_covariance.velocity = ic["velocity"].as<double>();
   cfg.initial_covariance.orientation = ic["orientation"].as<double>();
@@ -171,7 +174,7 @@ inline Config loadConfig(const std::string &path) {
 
 // ── Config → Params factories ────────────────────────────────
 
-inline StereoTracker::Params toTrackerParams(const TrackerConfig &tc) {
+inline StereoTracker::Params toTrackerParams(const TrackerConfig& tc) {
   StereoTracker::Params p;
   p.max_features = tc.max_features;
   p.fast_threshold = tc.fast_threshold;
@@ -183,7 +186,7 @@ inline StereoTracker::Params toTrackerParams(const TrackerConfig &tc) {
   return p;
 }
 
-inline StereoVO::Params toVoParams(const VoConfig &vc) {
+inline StereoVO::Params toVoParams(const VoConfig& vc) {
   StereoVO::Params p;
   p.min_pnp_points = vc.min_pnp_points;
   p.pnp_reproj_thresh = vc.pnp_reproj_thresh;
@@ -194,8 +197,7 @@ inline StereoVO::Params toVoParams(const VoConfig &vc) {
   return p;
 }
 
-inline EKF::NoiseParams toNoiseParams(const ImuConfig &imu,
-                                      const EkfConfig &ekf) {
+inline EKF::NoiseParams toNoiseParams(const ImuConfig& imu, const EkfConfig& ekf) {
   EKF::NoiseParams n;
   n.sigma_gyro = imu.noise_gyro;
   n.sigma_accel = imu.noise_accel;
@@ -206,4 +208,4 @@ inline EKF::NoiseParams toNoiseParams(const ImuConfig &imu,
   return n;
 }
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

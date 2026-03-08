@@ -1,3 +1,6 @@
+// Copyright (c) 2026, Long Vuong
+// SPDX-License-Identifier: BSD-3-Clause
+
 /**
  * ekf_vio/stereo_rectifier.hpp — Stereo rectification from calibration config.
  *
@@ -12,18 +15,19 @@
 #include "ekf_vio/types.hpp"
 
 #include <Eigen/Dense>
+
 #include <opencv2/core.hpp>
 
 namespace ekf_vio {
 
 class StereoRectifier {
-public:
+ public:
   /// Compute rectification maps from camera config.
-  void init(const CameraConfig &ccfg);
+  void init(const CameraConfig& ccfg);
 
   /// Rectify a raw stereo pair.
-  void rectify(const cv::Mat &raw_left, const cv::Mat &raw_right,
-               cv::Mat &rect_left, cv::Mat &rect_right) const;
+  void rectify(const cv::Mat& raw_left, const cv::Mat& raw_right, cv::Mat& rect_left,
+               cv::Mat& rect_right) const;
 
   /// Rectified intrinsics (valid after init()).
   double fx() const { return fx_; }
@@ -33,9 +37,9 @@ public:
   double baseline() const { return baseline_; }
 
   /// Rectification rotation applied to left camera (R1).
-  const Eigen::Matrix3d &R_rect() const { return R_rect_; }
+  const Eigen::Matrix3d& R_rect() const { return R_rect_; }
 
-private:
+ private:
   cv::Mat map1_left_, map2_left_;
   cv::Mat map1_right_, map2_right_;
   double fx_{}, fy_{}, cx_{}, cy_{}, baseline_{};
@@ -46,10 +50,9 @@ private:
 
 /// Build StereoCamera with T_cam_imu computed from rectification + T_BS0.
 /// Use this for VIO (needs cam↔IMU extrinsic).
-StereoCamera makeStereoCamera(const StereoRectifier &rect,
-                               const CameraConfig &ccfg);
+StereoCamera makeStereoCamera(const StereoRectifier& rect, const CameraConfig& ccfg);
 
 /// Build StereoCamera with identity T_cam_imu (VO-only mode, no IMU).
-StereoCamera makeStereoCamera(const StereoRectifier &rect);
+StereoCamera makeStereoCamera(const StereoRectifier& rect);
 
-} // namespace ekf_vio
+}  // namespace ekf_vio

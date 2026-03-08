@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026, Long Vuong
+# SPDX-License-Identifier: BSD-3-Clause
 """Compare VO-only vs EKF-VIO trajectories against EuRoC ground truth.
 
 Metrics:
