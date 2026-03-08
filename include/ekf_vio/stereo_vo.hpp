@@ -75,8 +75,7 @@ class StereoVO {
                        int& inlier_count);
 
   // Decide whether to spawn a new keyframe
-  bool shouldCreateKeyframe(int tracked_from_kf, int total_in_kf,
-                            const std::vector<Feature>& features) const;
+  bool shouldCreateKeyframe(int tracked_from_kf, int total_in_kf) const;
 
   // Create keyframe from current features at current pose
   void createKeyframe(const std::vector<Feature>& features);

@@ -52,7 +52,7 @@ class StereoTracker {
                    std::vector<uchar>& status) const;
 
   // Triangulate from stereo (assuming rectified cameras)
-  [[nodiscard]] Eigen::Vector3d triangulate(double u_l, double v_l, double u_r, double v_r) const;
+  [[nodiscard]] Eigen::Vector3d triangulate(double u_l, double v_l, double u_r) const;
 
   // Outlier rejection with fundamental matrix RANSAC
   void rejectOutliers(std::vector<cv::Point2f>& prev, std::vector<cv::Point2f>& curr,

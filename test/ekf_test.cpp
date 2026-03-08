@@ -40,11 +40,8 @@ ekf_vio::EKF::NoiseParams defaultNoise() {
   return n;
 }
 
-// Build synthetic features visible from a given camera pose
-// (landmarks placed randomly in front of the camera)
-std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera& cam,
-                                                    const Eigen::Vector3d& /*p_body*/,
-                                                    const Eigen::Quaterniond& /*q_wb*/, int count,
+// Build synthetic features (random landmarks in front of the camera)
+std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera& cam, int count,
                                                     int base_id = 0, unsigned seed = 42) {
   std::mt19937 rng(seed);
   std::uniform_real_distribution<double> dz(2.0, 6.0);
@@ -227,7 +224,7 @@ TEST(EKFTest, CamWorldRoundTrip) {
   // Actually, let's use the public API: create a feature, update (initialises landmark),
   // then update again (should have near-zero residual since nothing moved)
 
-  auto features = makeSyntheticFeatures(cam, ekf.state().p, ekf.state().q, 50);
+  auto features = makeSyntheticFeatures(cam, 50);
   ASSERT_GT(features.size(), 20u);
 
   const double trace_before = ekf.state().P.trace();
@@ -260,7 +257,7 @@ TEST(EKFTest, VisualUpdateShrinksCovarianceWithConsistentFeatures) {
   // Inflate covariance
   ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
 
-  auto features = makeSyntheticFeatures(cam, ekf.state().p, ekf.state().q, 80);
+  auto features = makeSyntheticFeatures(cam, 80);
   ASSERT_GT(features.size(), 30u);
 
   ekf.update(features);  // initialise landmarks

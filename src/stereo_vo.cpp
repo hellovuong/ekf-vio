@@ -84,8 +84,7 @@ Eigen::Isometry3d StereoVO::process(const std::vector<Feature>& features) {
   // ------------------------------------------------------------------
   // Keyframe management
   // ------------------------------------------------------------------
-  if (shouldCreateKeyframe(tracked_from_kf, static_cast<int>(keyframe_.landmarks.size()),
-                           features)) {
+  if (shouldCreateKeyframe(tracked_from_kf, static_cast<int>(keyframe_.landmarks.size()))) {
     createKeyframe(features);
   }
 
@@ -243,7 +242,7 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
 
   // Refine with all inliers
   std::vector<Eigen::Vector3d> inlier_curr;
-  std::vector<Eigen::Vector3d> inlier_kf;  // NOLINT(misc-const-correctness)
+  std::vector<Eigen::Vector3d> inlier_kf;
   for (int j = 0; j < N; ++j) {
     const Eigen::Vector3d p_kf_pred = best_T * pts_curr[j];
     if ((p_kf_pred - pts_kf[j]).norm() < thresh) {
@@ -258,8 +257,7 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
 }
 
 // ---------------------------------------------------------------------------
-bool StereoVO::shouldCreateKeyframe(int tracked_from_kf, int total_in_kf,
-                                    const std::vector<Feature>& /*features*/) const {
+bool StereoVO::shouldCreateKeyframe(int tracked_from_kf, int total_in_kf) const {
   if (total_in_kf == 0) return true;
 
   // Condition 1: too few features tracked from keyframe

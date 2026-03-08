@@ -98,7 +98,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
     if (disparity < params_.min_disparity || disparity > params_.max_disparity) continue;
 
     // Triangulate
-    const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r, v_r);
+    const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r);
     if (p_c.z() < 0.2 || p_c.z() > 30.0) continue;  // depth sanity
 
     Feature feat;
@@ -173,8 +173,7 @@ void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
 }
 
 // ---------------------------------------------------------------------------
-Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l, double u_r,
-                                           double /*v_r*/) const {
+Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l, double u_r) const {
   // Stereo triangulation (rectified horizontal stereo):
   const double disp = u_l - u_r;
   const double Z = cam_.fx * cam_.baseline / disp;
