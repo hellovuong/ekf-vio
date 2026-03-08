@@ -31,7 +31,7 @@ class EKF {
     int landmark_max_age = 5;             // keep landmarks for N frames after last observation
   };
 
-  explicit EKF(const StereoCamera& cam, const NoiseParams& noise);
+  explicit EKF(StereoCamera cam, const NoiseParams& noise);
 
   // -----------------------------------------------------------------------
   // Propagate state using IMU measurement over interval dt [seconds]

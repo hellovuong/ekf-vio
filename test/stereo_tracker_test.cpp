@@ -52,7 +52,8 @@ TEST(StereoTrackerTest, TriangulatesExpectedDepthFromKnownDisparity) {
 
   ekf_vio::StereoTracker tracker(cam, p);
 
-  cv::Mat left, right;
+  cv::Mat left;
+  cv::Mat right;
   const int disparity_px = 28;
   makeShiftedStereoPair(640, 480, disparity_px, left, right);
 
@@ -74,7 +75,8 @@ TEST(StereoTrackerTest, KeepsFeatureIdsAcrossFrames) {
 
   ekf_vio::StereoTracker tracker(cam, p);
 
-  cv::Mat left, right;
+  cv::Mat left;
+  cv::Mat right;
   makeShiftedStereoPair(640, 480, 24, left, right);
 
   const auto f1 = tracker.track(left, right);
@@ -89,7 +91,7 @@ TEST(StereoTrackerTest, KeepsFeatureIdsAcrossFrames) {
 
   int overlap = 0;
   for (const auto& f : f2) {
-    if (ids1.count(f.id)) ++overlap;
+    if (ids1.contains(f.id)) ++overlap;
   }
 
   const int denom = std::min(static_cast<int>(f1.size()), static_cast<int>(f2.size()));

@@ -16,25 +16,32 @@ void StereoRectifier::init(const CameraConfig& ccfg) {
   const auto& c0 = ccfg.cam0;
   const auto& c1 = ccfg.cam1;
 
-  cv::Mat K0 = (cv::Mat_<double>(3, 3) << c0.fx, 0.0, c0.cx, 0.0, c0.fy, c0.cy, 0.0, 0.0, 1.0);
-  cv::Mat D0 = (cv::Mat_<double>(4, 1) << c0.distortion[0], c0.distortion[1], c0.distortion[2],
-                c0.distortion[3]);
+  const cv::Mat K0 =
+      (cv::Mat_<double>(3, 3) << c0.fx, 0.0, c0.cx, 0.0, c0.fy, c0.cy, 0.0, 0.0, 1.0);
+  const cv::Mat D0 = (cv::Mat_<double>(4, 1) << c0.distortion[0], c0.distortion[1],
+                      c0.distortion[2], c0.distortion[3]);
 
-  cv::Mat K1 = (cv::Mat_<double>(3, 3) << c1.fx, 0.0, c1.cx, 0.0, c1.fy, c1.cy, 0.0, 0.0, 1.0);
-  cv::Mat D1 = (cv::Mat_<double>(4, 1) << c1.distortion[0], c1.distortion[1], c1.distortion[2],
-                c1.distortion[3]);
+  const cv::Mat K1 =
+      (cv::Mat_<double>(3, 3) << c1.fx, 0.0, c1.cx, 0.0, c1.fy, c1.cy, 0.0, 0.0, 1.0);
+  const cv::Mat D1 = (cv::Mat_<double>(4, 1) << c1.distortion[0], c1.distortion[1],
+                      c1.distortion[2], c1.distortion[3]);
 
   // T_{cam1<-cam0} = inv(T_BS1) * T_BS0
   Eigen::Matrix4d T_rel = ccfg.T_BS1.inverse() * ccfg.T_BS0;
-  cv::Mat R_cv(3, 3, CV_64F), T_cv(3, 1, CV_64F);
+  cv::Mat R_cv(3, 3, CV_64F);
+  cv::Mat T_cv(3, 1, CV_64F);
   for (int r = 0; r < 3; ++r) {
     for (int c = 0; c < 3; ++c)
       R_cv.at<double>(r, c) = T_rel(r, c);
     T_cv.at<double>(r) = T_rel(r, 3);
   }
 
-  cv::Size imgSize(ccfg.image_width, ccfg.image_height);
-  cv::Mat R1, R2, P1, P2, Q;
+  const cv::Size imgSize(ccfg.image_width, ccfg.image_height);
+  cv::Mat R1;
+  cv::Mat R2;
+  cv::Mat P1;
+  cv::Mat P2;
+  cv::Mat Q;
   cv::stereoRectify(K0, D0, K1, D1, imgSize, R_cv, T_cv, R1, R2, P1, P2, Q,
                     cv::CALIB_ZERO_DISPARITY, 0.0, imgSize);
 
@@ -42,11 +49,13 @@ void StereoRectifier::init(const CameraConfig& ccfg) {
   cv::initUndistortRectifyMap(K1, D1, R2, P2, imgSize, CV_32FC1, map1_right_, map2_right_);
 
   // Store R1 for T_cam_imu correction
-  for (int r = 0; r < 3; ++r)
-    for (int c = 0; c < 3; ++c)
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < 3; ++c) {
       R_rect_(r, c) = R1.at<double>(r, c);
+    }
+  }
 
-  double f_rect = P1.at<double>(0, 0);
+  const double f_rect = P1.at<double>(0, 0);
   fx_ = f_rect;
   fy_ = f_rect;
   cx_ = P1.at<double>(0, 2);

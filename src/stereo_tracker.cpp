@@ -8,11 +8,13 @@
 #include <opencv2/video/tracking.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace ekf_vio {
 
 // ---------------------------------------------------------------------------
-StereoTracker::StereoTracker(const StereoCamera& cam, const Params& p) : cam_(cam), params_(p) {}
+StereoTracker::StereoTracker(StereoCamera cam, const Params& p)
+    : cam_(std::move(cam)), params_(p) {}
 
 // ---------------------------------------------------------------------------
 std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat& img_right) {
@@ -26,7 +28,7 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
 
   if (!prev_left_.empty() && !prev_pts_.empty()) {
     std::vector<float> err;
-    cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+    const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
     cv::calcOpticalFlowPyrLK(prev_left_, img_left, prev_pts_, curr_pts, status_temporal, err,
                              cv::Size(params_.lk_win_size, params_.lk_win_size),
                              params_.lk_max_level, criteria);
@@ -41,8 +43,9 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   // 2. Detect new features if we lost too many
   // -----------------------------------------------------------------------
   int valid_count = 0;
-  for (auto s : status_temporal)
-    valid_count += (s > 0);
+  for (auto s : status_temporal) {
+    valid_count += static_cast<int>(s > 0);
+  }
 
   std::vector<cv::Point2f> new_pts;
   if (valid_count < params_.max_features / 2) {
@@ -147,7 +150,8 @@ void StereoTracker::detectNew(const cv::Mat& img, std::vector<cv::Point2f>& pts)
 // ---------------------------------------------------------------------------
 void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
                                 const std::vector<cv::Point2f>& left_pts,
-                                std::vector<cv::Point2f>& right_pts, std::vector<uchar>& status) {
+                                std::vector<cv::Point2f>& right_pts,
+                                std::vector<uchar>& status) const {
   if (left_pts.empty()) {
     status.clear();
     return;
@@ -156,7 +160,7 @@ void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
   // Horizontal stereo: LK flow
   right_pts = left_pts;
   std::vector<float> err;
-  cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+  const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
   cv::calcOpticalFlowPyrLK(left, right, left_pts, right_pts, status, err,
                            cv::Size(params_.lk_win_size, params_.lk_win_size), params_.lk_max_level,
                            criteria);
@@ -169,19 +173,21 @@ void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
 }
 
 // ---------------------------------------------------------------------------
-Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l, double u_r, double v_r) const {
+Eigen::Vector3d StereoTracker::triangulate(double u_l, double v_l, double u_r,
+                                           double /*v_r*/) const {
   // Stereo triangulation (rectified horizontal stereo):
   const double disp = u_l - u_r;
   const double Z = cam_.fx * cam_.baseline / disp;
   const double X = (u_l - cam_.cx) * Z / cam_.fx;
   const double Y = (v_l - cam_.cy) * Z / cam_.fy;
-  return Eigen::Vector3d(X, Y, Z);
+  return {X, Y, Z};
 }
 
 // ---------------------------------------------------------------------------
 void StereoTracker::rejectOutliers(std::vector<cv::Point2f>& prev, std::vector<cv::Point2f>& curr,
-                                   std::vector<uchar>& status) {
-  std::vector<cv::Point2f> p_in, c_in;
+                                   std::vector<uchar>& status) const {
+  std::vector<cv::Point2f> p_in;
+  std::vector<cv::Point2f> c_in;
   for (size_t i = 0; i < status.size(); ++i) {
     if (status[i]) {
       p_in.push_back(prev[i]);
@@ -195,9 +201,9 @@ void StereoTracker::rejectOutliers(std::vector<cv::Point2f>& prev, std::vector<c
 
   // Map ransac_status back to full status vector
   int idx = 0;
-  for (size_t i = 0; i < status.size(); ++i) {
-    if (status[i]) {
-      status[i] = ransac_status[idx++];
+  for (auto& s : status) {
+    if (s) {
+      s = ransac_status[idx++];
     }
   }
 }

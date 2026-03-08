@@ -43,13 +43,9 @@ ekf_vio::EKF::NoiseParams defaultNoise() {
 // Build synthetic features visible from a given camera pose
 // (landmarks placed randomly in front of the camera)
 std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera& cam,
-                                                    const Eigen::Vector3d& p_body,
-                                                    const Eigen::Quaterniond& q_wb, int count,
+                                                    const Eigen::Vector3d& /*p_body*/,
+                                                    const Eigen::Quaterniond& /*q_wb*/, int count,
                                                     int base_id = 0, unsigned seed = 42) {
-  const Eigen::Matrix3d R_ci = cam.T_cam_imu.rotation();
-  const Eigen::Vector3d t_ci = cam.T_cam_imu.translation();
-  const Eigen::Matrix3d R_wb = q_wb.toRotationMatrix();
-
   std::mt19937 rng(seed);
   std::uniform_real_distribution<double> dz(2.0, 6.0);
   std::uniform_real_distribution<double> dx(-1.5, 1.5);
@@ -58,12 +54,12 @@ std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera&
   std::vector<ekf_vio::Feature> features;
   for (int i = 0; i < count; ++i) {
     // Random point in camera frame
-    Eigen::Vector3d p_c(dx(rng), dy(rng), dz(rng));
-    double inv_z = 1.0 / p_c.z();
-    double u_l = cam.fx * p_c.x() * inv_z + cam.cx;
-    double v_l = cam.fy * p_c.y() * inv_z + cam.cy;
-    double u_r = cam.fx * (p_c.x() - cam.baseline) * inv_z + cam.cx;
-    double v_r = v_l;
+    const Eigen::Vector3d p_c(dx(rng), dy(rng), dz(rng));
+    const double inv_z = 1.0 / p_c.z();
+    const double u_l = cam.fx * p_c.x() * inv_z + cam.cx;
+    const double v_l = cam.fy * p_c.y() * inv_z + cam.cy;
+    const double u_r = cam.fx * (p_c.x() - cam.baseline) * inv_z + cam.cx;
+    const double v_r = v_l;
 
     if (u_l < 0 || u_l > 640 || v_l < 0 || v_l > 480) continue;
     if ((u_l - u_r) < 1.0) continue;
@@ -219,7 +215,7 @@ TEST(EKFTest, CamWorldRoundTrip) {
   ekf.state().q = Eigen::Quaterniond(Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()));
 
   // A point in camera frame
-  Eigen::Vector3d p_c(0.5, -0.3, 4.0);
+  const Eigen::Vector3d p_c(0.5, -0.3, 4.0);
 
   // cam → world → cam should give back the same point
   // We need access to camToWorld and worldToCam, which are private.
@@ -421,7 +417,7 @@ TEST(EKFTest, ExpLogSO3RoundTrip) {
   using namespace ekf_vio::math;
 
   // Several rotation vectors
-  std::vector<Eigen::Vector3d> omegas = {
+  const std::vector<Eigen::Vector3d> omegas = {
       {0.0, 0.0, 0.0}, {0.1, 0.0, 0.0}, {0.0, -0.2, 0.0}, {0.1, 0.2, -0.3}, {1.0, 0.5, -0.7},
   };
 
@@ -479,6 +475,6 @@ TEST(EKFTest, CovarianceStaysSymmetric) {
   // Symmetry
   EXPECT_NEAR((P - P.transpose()).norm(), 0.0, 1e-12);
   // All eigenvalues >= 0
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> eig(P);
+  const Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> eig(P);
   EXPECT_GE(eig.eigenvalues().minCoeff(), -1e-12);
 }

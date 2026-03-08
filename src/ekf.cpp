@@ -8,13 +8,14 @@
 #include <ekf_vio/logging.hpp>
 #include <ekf_vio/math_utils.hpp>
 #include <numeric>
+#include <utility>
 
 namespace ekf_vio {
 
 using namespace math;
 
 // ---------------------------------------------------------------------------
-EKF::EKF(const StereoCamera& cam, const NoiseParams& noise) : cam_(cam), noise_(noise) {}
+EKF::EKF(StereoCamera cam, const NoiseParams& noise) : cam_(std::move(cam)), noise_(noise) {}
 
 // ---------------------------------------------------------------------------
 // PREDICT step
@@ -68,7 +69,6 @@ void EKF::update(const std::vector<Feature>& features) {
   // Precompute transforms
   const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();  // body→world
   const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();    // imu→cam
-  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
   // World→camera: R_cw = R_ci * R_wb^T
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
@@ -114,7 +114,10 @@ void EKF::update(const std::vector<Feature>& features) {
     if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
 
     // Predicted stereo projection
-    double eu_l, ev_l, eu_r, ev_r;
+    double eu_l = 0.0;
+    double ev_l = 0.0;
+    double eu_r = 0.0;
+    double ev_r = 0.0;
     project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
 
     // Residual  z - h(x)
@@ -186,14 +189,14 @@ void EKF::update(const std::vector<Feature>& features) {
     jacobians = std::move(j2);
   }
 
-  const int N = static_cast<int>(residuals.size());
+  const auto N = static_cast<Eigen::Index>(residuals.size());
   if (N == 0) return;
 
   // Assemble stacked z and H
   Eigen::VectorXd z_all(4 * N);
   Eigen::MatrixXd H_all(4 * N, 15);
   H_all.setZero();
-  for (int k = 0; k < N; ++k) {
+  for (Eigen::Index k = 0; k < N; ++k) {
     z_all.segment<4>(4 * k) = residuals[k];
     H_all.block<4, 15>(4 * k, 0) = jacobians[k];
   }
@@ -255,10 +258,11 @@ void EKF::update(const std::vector<Feature>& features) {
 
   // Prune stale landmarks (age-based sliding window)
   for (auto it = landmarks_.begin(); it != landmarks_.end();) {
-    if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age)
+    if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age) {
       it = landmarks_.erase(it);
-    else
+    } else {
       ++it;
+    }
   }
 }
 
@@ -327,13 +331,6 @@ void EKF::updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond
 EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
                            const Eigen::Vector3d& a_c, double dt) const {
   const Eigen::Vector3d g = gravity();
-  // Derivative function: given state, return (ṗ, v̇, q̇ axis-angle)
-  auto deriv = [&](const PVQ& s) -> PVQ {
-    const Eigen::Matrix3d R = s.q.toRotationMatrix();
-    return {s.v, R * a_c + g,
-            Eigen::Quaterniond(0.0, 0.5 * omega_c.x(), 0.5 * omega_c.y(), 0.5 * omega_c.z())};
-    // Note: q̇ = 0.5 * q ⊗ [0, ω].  We encode the ω part here; multiply below.
-  };
 
   // For quaternion we use direct integration:  Δq = expSO3(ω * dt)
   // k1..k4 for p and v; quaternion handled separately via expSO3
@@ -346,18 +343,18 @@ EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
   // k2 (use mid-point velocity from k1)
   const Eigen::Vector3d v2 = pvq.v + 0.5 * dt * dv1;
   const Eigen::Matrix3d R2 = R * expSO3(omega_c * 0.5 * dt);
-  const Eigen::Vector3d dp2 = v2;
+  const Eigen::Vector3d& dp2 = v2;
   const Eigen::Vector3d dv2 = R2 * a_c + g;
 
   // k3 (same mid-point rotation as k2)
   const Eigen::Vector3d v3 = pvq.v + 0.5 * dt * dv2;
-  const Eigen::Vector3d dp3 = v3;
+  const Eigen::Vector3d& dp3 = v3;
   const Eigen::Vector3d dv3 = R2 * a_c + g;
 
   // k4 (full step rotation)
   const Eigen::Vector3d v4 = pvq.v + dt * dv3;
   const Eigen::Matrix3d R4 = R * expSO3(omega_c * dt);
-  const Eigen::Vector3d dp4 = v4;
+  const Eigen::Vector3d& dp4 = v4;
   const Eigen::Vector3d dv4 = R4 * a_c + g;
 
   PVQ next;

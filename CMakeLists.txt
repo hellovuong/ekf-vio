@@ -12,6 +12,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Warning flags (applied per-target below to avoid leaking into dependencies)
+# ──────────────────────────────────────────────────────────────────────────────
+set(EKF_VIO_WARN_FLAGS
+    -Wall -Wextra -Wpedantic -Werror
+    -Wno-unknown-warning-option   # lets clang/clang-tidy ignore GCC-specific flags
+)
+# GCC 13+ false-positives in fmt/spdlog templates
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  list(APPEND EKF_VIO_WARN_FLAGS -Wno-error=stringop-overflow -Wno-error=array-bounds)
+endif()
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
@@ -52,15 +64,18 @@ target_link_libraries(ekf_vio_core PUBLIC
     spdlog::spdlog
     yaml-cpp
 )
+target_compile_options(ekf_vio_core PRIVATE ${EKF_VIO_WARN_FLAGS})
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Executable: euroc_runner  (standalone, no ROS2 dependency)
 # ──────────────────────────────────────────────────────────────────────────────
 add_executable(euroc_runner app/euroc_main.cpp)
 target_link_libraries(euroc_runner PRIVATE ekf_vio_core)
+target_compile_options(euroc_runner PRIVATE ${EKF_VIO_WARN_FLAGS})
 
 add_executable(euroc_vo_runner app/euroc_vo_main.cpp)
 target_link_libraries(euroc_vo_runner PRIVATE ekf_vio_core)
+target_compile_options(euroc_vo_runner PRIVATE ${EKF_VIO_WARN_FLAGS})
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Executable: vio_node
@@ -76,6 +91,7 @@ target_link_libraries(vio_node PRIVATE ekf_vio_core
     ${cv_bridge_TARGETS}
     ${message_filters_TARGETS}
 )
+target_compile_options(vio_node PRIVATE ${EKF_VIO_WARN_FLAGS})
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Install
@@ -96,12 +112,15 @@ if(BUILD_TESTING)
 
   ament_add_gtest(stereo_tracker_test test/stereo_tracker_test.cpp)
   target_link_libraries(stereo_tracker_test ekf_vio_core)
+  target_compile_options(stereo_tracker_test PRIVATE ${EKF_VIO_WARN_FLAGS})
 
   ament_add_gtest(stereo_vo_test test/stereo_vo_test.cpp)
   target_link_libraries(stereo_vo_test ekf_vio_core)
+  target_compile_options(stereo_vo_test PRIVATE ${EKF_VIO_WARN_FLAGS})
 
   ament_add_gtest(ekf_test test/ekf_test.cpp)
   target_link_libraries(ekf_test ekf_vio_core)
+  target_compile_options(ekf_test PRIVATE ${EKF_VIO_WARN_FLAGS})
 endif()
 
 ament_package()

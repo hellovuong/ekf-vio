@@ -18,7 +18,7 @@ Checks: >
   -readability-convert-member-functions-to-static,
   -readability-uppercase-literal-suffix,
 
-WarningsAsErrors: ''
+WarningsAsErrors: '*'
 
 HeaderFilterRegex: 'include/ekf_vio/.*\.hpp$'
 

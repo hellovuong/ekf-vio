@@ -30,14 +30,14 @@ class StereoRectifier {
                cv::Mat& rect_right) const;
 
   /// Rectified intrinsics (valid after init()).
-  double fx() const { return fx_; }
-  double fy() const { return fy_; }
-  double cx() const { return cx_; }
-  double cy() const { return cy_; }
-  double baseline() const { return baseline_; }
+  [[nodiscard]] double fx() const { return fx_; }
+  [[nodiscard]] double fy() const { return fy_; }
+  [[nodiscard]] double cx() const { return cx_; }
+  [[nodiscard]] double cy() const { return cy_; }
+  [[nodiscard]] double baseline() const { return baseline_; }
 
   /// Rectification rotation applied to left camera (R1).
-  const Eigen::Matrix3d& R_rect() const { return R_rect_; }
+  [[nodiscard]] const Eigen::Matrix3d& R_rect() const { return R_rect_; }
 
  private:
   cv::Mat map1_left_, map2_left_;

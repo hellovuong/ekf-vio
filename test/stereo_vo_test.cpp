@@ -140,9 +140,7 @@ TEST(StereoVOTest, RecoversKnownTranslation) {
   // World landmarks
   auto lm_world = makeLandmarks(200, 2.0, 6.0);
 
-  // Frame 0: camera at identity
-  Eigen::Isometry3d T_wc0 = Eigen::Isometry3d::Identity();
-  // Points in camera frame = world points (identity transform)
+  // Frame 0: camera at identity — points in camera frame = world points
   auto feat0 = buildFeatures(cam, lm_world);
   ASSERT_GT(feat0.size(), 50u);
 
@@ -155,10 +153,7 @@ TEST(StereoVOTest, RecoversKnownTranslation) {
   auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
   auto feat1 = buildFeatures(cam, lm_cam1);
   // Keep same IDs as feat0
-  for (auto& f : feat1) {
-    // The id in buildFeatures is base_id + i, so IDs match if we use same base
-    // This works because both calls use base_id=0 and same landmark order
-  }
+  // IDs match because both buildFeatures calls use base_id=0 and same landmark order
   ASSERT_GT(feat1.size(), 50u);
 
   vo.process(feat1);

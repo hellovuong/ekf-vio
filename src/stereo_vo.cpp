@@ -10,13 +10,15 @@
 #include <cmath>
 #include <ekf_vio/logging.hpp>
 #include <random>
+#include <utility>
 
 namespace ekf_vio {
 
 // ---------------------------------------------------------------------------
-StereoVO::StereoVO(const StereoCamera& cam) : cam_(cam) {}
+StereoVO::StereoVO(StereoCamera cam) : cam_(std::move(cam)) {}
 
-StereoVO::StereoVO(const StereoCamera& cam, const Params& params) : cam_(cam), params_(params) {}
+StereoVO::StereoVO(StereoCamera cam, const Params& params)
+    : cam_(std::move(cam)), params_(params) {}
 
 // ---------------------------------------------------------------------------
 int StereoVO::numKeyframeLandmarks() const {
@@ -93,7 +95,7 @@ Eigen::Isometry3d StereoVO::process(const std::vector<Feature>& features) {
 // ---------------------------------------------------------------------------
 bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
                          const std::vector<cv::Point2f>& pts_2d, Eigen::Isometry3d& T_ck,
-                         int& inlier_count) {
+                         int& inlier_count) const {
   const int N = static_cast<int>(pts_3d.size());
   if (N < params_.min_pnp_points) return false;
 
@@ -105,18 +107,19 @@ bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
   }
 
   // Camera matrix (rectified intrinsics, no distortion)
-  cv::Mat K =
+  const cv::Mat K =
       (cv::Mat_<double>(3, 3) << cam_.fx, 0.0, cam_.cx, 0.0, cam_.fy, cam_.cy, 0.0, 0.0, 1.0);
-  cv::Mat dist_coeffs;  // empty = no distortion (already rectified)
+  const cv::Mat dist_coeffs;  // empty = no distortion (already rectified)
 
-  cv::Mat rvec, tvec;
+  cv::Mat rvec;
+  cv::Mat tvec;
   cv::Mat inliers_mat;
-  bool ok = cv::solvePnPRansac(obj_pts, pts_2d, K, dist_coeffs, rvec, tvec,
-                               false,  // useExtrinsicGuess
-                               300,    // iterationsCount
-                               static_cast<float>(params_.pnp_reproj_thresh),
-                               0.99,  // confidence
-                               inliers_mat, cv::SOLVEPNP_ITERATIVE);
+  const bool ok = cv::solvePnPRansac(obj_pts, pts_2d, K, dist_coeffs, rvec, tvec,
+                                     false,  // useExtrinsicGuess
+                                     300,    // iterationsCount
+                                     static_cast<float>(params_.pnp_reproj_thresh),
+                                     0.99,  // confidence
+                                     inliers_mat, cv::SOLVEPNP_ITERATIVE);
 
   if (!ok || inliers_mat.empty()) return false;
 
@@ -127,7 +130,7 @@ bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
     std::vector<cv::Point3f> inlier_obj;
     std::vector<cv::Point2f> inlier_img;
     for (int i = 0; i < inlier_count; ++i) {
-      int idx = inliers_mat.at<int>(i);
+      const int idx = inliers_mat.at<int>(i);
       inlier_obj.push_back(obj_pts[idx]);
       inlier_img.push_back(pts_2d[idx]);
     }
@@ -151,9 +154,11 @@ bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
 }
 
 // ---------------------------------------------------------------------------
+namespace {
+
 // Rigid 3D-3D alignment using SVD (Horn's method, no scale)
-static Eigen::Isometry3d alignSVD(const std::vector<Eigen::Vector3d>& src,
-                                  const std::vector<Eigen::Vector3d>& dst) {
+Eigen::Isometry3d alignSVD(const std::vector<Eigen::Vector3d>& src,
+                           const std::vector<Eigen::Vector3d>& dst) {
   // src = points in frame A, dst = corresponding points in frame B
   // Returns T_{B <- A} such that dst[i] ≈ T * src[i]
   const int N = static_cast<int>(src.size());
@@ -171,20 +176,22 @@ static Eigen::Isometry3d alignSVD(const std::vector<Eigen::Vector3d>& src,
     H += (src[i] - c_src) * (dst[i] - c_dst).transpose();
   }
 
-  Eigen::JacobiSVD<Eigen::Matrix3d> svd(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  Eigen::Matrix3d V = svd.matrixV();
-  Eigen::Matrix3d U = svd.matrixU();
-  double d = (V * U.transpose()).determinant();
+  const Eigen::JacobiSVD<Eigen::Matrix3d> svd(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  const Eigen::Matrix3d& V = svd.matrixV();
+  const Eigen::Matrix3d& U = svd.matrixU();
+  const double d = (V * U.transpose()).determinant();
   Eigen::Matrix3d D = Eigen::Matrix3d::Identity();
   D(2, 2) = d;  // ensure proper rotation (det=+1)
-  Eigen::Matrix3d R = V * D * U.transpose();
-  Eigen::Vector3d t = c_dst - R * c_src;
+  const Eigen::Matrix3d R = V * D * U.transpose();
+  const Eigen::Vector3d t = c_dst - R * c_src;
 
   Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
   T.linear() = R;
   T.translation() = t;
   return T;
 }
+
+}  // namespace
 
 bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
                                const std::vector<Eigen::Vector3d>& pts_curr,
@@ -203,7 +210,9 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
 
   for (int iter = 0; iter < max_iters; ++iter) {
     // Sample 3 random correspondences
-    int i0 = dist(rng), i1, i2;
+    const int i0 = dist(rng);
+    int i1 = 0;
+    int i2 = 0;
     do {
       i1 = dist(rng);
     } while (i1 == i0);
@@ -211,16 +220,16 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
       i2 = dist(rng);
     } while (i2 == i0 || i2 == i1);
 
-    std::vector<Eigen::Vector3d> s_curr = {pts_curr[i0], pts_curr[i1], pts_curr[i2]};
-    std::vector<Eigen::Vector3d> s_kf = {pts_kf[i0], pts_kf[i1], pts_kf[i2]};
+    const std::vector<Eigen::Vector3d> s_curr = {pts_curr[i0], pts_curr[i1], pts_curr[i2]};
+    const std::vector<Eigen::Vector3d> s_kf = {pts_kf[i0], pts_kf[i1], pts_kf[i2]};
 
     // Fit: T_{kf <- curr} such that pts_kf[i] ≈ T * pts_curr[i]
-    Eigen::Isometry3d T_cand = alignSVD(s_curr, s_kf);
+    const Eigen::Isometry3d T_cand = alignSVD(s_curr, s_kf);
 
     // Count inliers
     int n_inliers = 0;
     for (int j = 0; j < N; ++j) {
-      Eigen::Vector3d p_kf_pred = T_cand * pts_curr[j];
+      const Eigen::Vector3d p_kf_pred = T_cand * pts_curr[j];
       if ((p_kf_pred - pts_kf[j]).norm() < thresh) ++n_inliers;
     }
 
@@ -233,9 +242,10 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
   if (best_inliers < 3) return false;
 
   // Refine with all inliers
-  std::vector<Eigen::Vector3d> inlier_curr, inlier_kf;
+  std::vector<Eigen::Vector3d> inlier_curr;
+  std::vector<Eigen::Vector3d> inlier_kf;  // NOLINT(misc-const-correctness)
   for (int j = 0; j < N; ++j) {
-    Eigen::Vector3d p_kf_pred = best_T * pts_curr[j];
+    const Eigen::Vector3d p_kf_pred = best_T * pts_curr[j];
     if ((p_kf_pred - pts_kf[j]).norm() < thresh) {
       inlier_curr.push_back(pts_curr[j]);
       inlier_kf.push_back(pts_kf[j]);
@@ -249,12 +259,11 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
 
 // ---------------------------------------------------------------------------
 bool StereoVO::shouldCreateKeyframe(int tracked_from_kf, int total_in_kf,
-                                    const std::vector<Feature>& features) const {
+                                    const std::vector<Feature>& /*features*/) const {
   if (total_in_kf == 0) return true;
 
   // Condition 1: too few features tracked from keyframe
   const double ratio = static_cast<double>(tracked_from_kf) / static_cast<double>(total_in_kf);
-  if (ratio < params_.kf_tracked_ratio || tracked_from_kf < params_.kf_min_tracked) return true;
 
   // Condition 2: sufficient parallax (median pixel displacement from KF)
   // We approximate this using the displacement between keyframe 2D positions
@@ -262,7 +271,7 @@ bool StereoVO::shouldCreateKeyframe(int tracked_from_kf, int total_in_kf,
   // (A more precise metric would use the actual angular parallax.)
   // For simplicity, just use the ratio criterion above — it works well in practice.
 
-  return false;
+  return ratio < params_.kf_tracked_ratio || tracked_from_kf < params_.kf_min_tracked;
 }
 
 // ---------------------------------------------------------------------------

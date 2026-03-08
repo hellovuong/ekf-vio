@@ -36,8 +36,8 @@ class StereoVO {
     double max_rotation_deg = 30.0;    // reject PnP if rotation > this (per frame)
   };
 
-  explicit StereoVO(const StereoCamera& cam);
-  StereoVO(const StereoCamera& cam, const Params& params);
+  explicit StereoVO(StereoCamera cam);
+  StereoVO(StereoCamera cam, const Params& params);
 
   // -----------------------------------------------------------------------
   // Process one set of stereo features (output of StereoTracker::track).
@@ -66,7 +66,7 @@ class StereoVO {
   // Solve pose of current frame relative to keyframe using PnP
   // Returns true if successful; fills T_ck (T_{curr_cam ← kf_cam})
   bool solvePose(const std::vector<Eigen::Vector3d>& pts_3d, const std::vector<cv::Point2f>& pts_2d,
-                 Eigen::Isometry3d& T_ck, int& inlier_count);
+                 Eigen::Isometry3d& T_ck, int& inlier_count) const;
 
   // Solve motion using 3D-3D alignment (SVD + RANSAC)
   // Returns true if successful; fills T_kf_curr (T_{kf_cam ← curr_cam})

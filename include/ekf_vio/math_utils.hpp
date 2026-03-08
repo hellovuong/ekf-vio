@@ -7,8 +7,7 @@
 #include <Eigen/Geometry>
 #include <sophus/so3.hpp>
 
-namespace ekf_vio {
-namespace math {
+namespace ekf_vio::math {
 
 // ---------------------------------------------------------------------------
 // Skew-symmetric matrix [v]×  such that [v]× u = v × u
@@ -61,5 +60,4 @@ inline Eigen::Vector3d gravity() {
   return {0.0, 0.0, -9.81};
 }
 
-}  // namespace math
-}  // namespace ekf_vio
+}  // namespace ekf_vio::math

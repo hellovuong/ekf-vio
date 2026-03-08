@@ -75,7 +75,8 @@ int main(int argc, char** argv) {
                     have_gt = true;
                   }
 
-                  cv::Mat rect_left, rect_right;
+                  cv::Mat rect_left;
+                  cv::Mat rect_right;
                   rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
                   const auto features = tracker.track(rect_left, rect_right);
                   Eigen::Isometry3d T_wc = vo.process(features);

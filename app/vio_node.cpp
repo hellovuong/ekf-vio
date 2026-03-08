@@ -16,6 +16,8 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include <functional>
+
 namespace ekf_vio {
 
 class VIONode : public rclcpp::Node {
@@ -53,9 +55,11 @@ class VIONode : public rclcpp::Node {
 
     auto T_flat = this->get_parameter("T_cam_imu").as_double_array();
     Eigen::Matrix4d T_mat;
-    for (int r = 0; r < 4; ++r)
-      for (int c = 0; c < 4; ++c)
+    for (int r = 0; r < 4; ++r) {
+      for (int c = 0; c < 4; ++c) {
         T_mat(r, c) = T_flat[r * 4 + c];
+      }
+    }
     cam.T_cam_imu = Eigen::Isometry3d(T_mat);
 
     EKF::NoiseParams noise;
@@ -76,7 +80,7 @@ class VIONode : public rclcpp::Node {
     // ----------------------------------------------------------------
     imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
         "/imu/data", rclcpp::SensorDataQoS(),
-        std::bind(&VIONode::imuCallback, this, std::placeholders::_1));
+        [this](const sensor_msgs::msg::Imu::ConstSharedPtr& msg) { imuCallback(msg); });
 
     // Approximate-time sync for stereo pair
     left_sub_.subscribe(this, "/camera/left/image_raw");
@@ -86,8 +90,11 @@ class VIONode : public rclcpp::Node {
                                                                          sensor_msgs::msg::Image>;
     stereo_sync_ = std::make_shared<message_filters::Synchronizer<StereoPolicy>>(
         StereoPolicy(10), left_sub_, right_sub_);
+    // clang-format off
     stereo_sync_->registerCallback(
-        std::bind(&VIONode::stereoCallback, this, std::placeholders::_1, std::placeholders::_2));
+        std::bind(&VIONode::stereoCallback, this,                    // NOLINT(modernize-avoid-bind)
+                  std::placeholders::_1, std::placeholders::_2));
+    // clang-format on
 
     // ----------------------------------------------------------------
     // Publishers
@@ -134,7 +141,8 @@ class VIONode : public rclcpp::Node {
   // ----------------------------------------------------------------
   void stereoCallback(const sensor_msgs::msg::Image::ConstSharedPtr& left_msg,
                       const sensor_msgs::msg::Image::ConstSharedPtr& right_msg) {
-    cv::Mat left, right;
+    cv::Mat left;
+    cv::Mat right;
     try {
       left = cv_bridge::toCvShare(left_msg, "mono8")->image;
       right = cv_bridge::toCvShare(right_msg, "mono8")->image;
@@ -199,9 +207,11 @@ class VIONode : public rclcpp::Node {
     odom.twist.twist.linear.z = s.v.z();
 
     // Copy pose covariance (top-left 6×6 of 15×15 error-state cov)
-    for (int r = 0; r < 6; ++r)
-      for (int c = 0; c < 6; ++c)
+    for (int r = 0; r < 6; ++r) {
+      for (int c = 0; c < 6; ++c) {
         odom.pose.covariance[r * 6 + c] = s.P(r, c);
+      }
+    }
 
     odom_pub_->publish(odom);
 

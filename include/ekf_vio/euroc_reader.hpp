@@ -7,6 +7,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <variant>
@@ -41,7 +42,7 @@ struct GroundTruth {
 
 // A single chronological event: either an IMU sample or a stereo frame
 struct DataEvent {
-  enum Type { IMU, STEREO };
+  enum Type : std::uint8_t { IMU, STEREO };
   Type type;
   // Index into the respective array (imu_data or stereo_timestamps)
   size_t index;
@@ -57,21 +58,21 @@ class EurocReader {
   bool load();
 
   // Total counts
-  size_t numImu() const { return imu_data_.size(); }
-  size_t numStereo() const { return stereo_timestamps_.size(); }
-  size_t numEvents() const { return events_.size(); }
+  [[nodiscard]] size_t numImu() const { return imu_data_.size(); }
+  [[nodiscard]] size_t numStereo() const { return stereo_timestamps_.size(); }
+  [[nodiscard]] size_t numEvents() const { return events_.size(); }
 
   // Access pre-parsed IMU data
-  const std::vector<ImuData>& imuData() const { return imu_data_; }
+  [[nodiscard]] const std::vector<ImuData>& imuData() const { return imu_data_; }
 
   // Access merged timeline
-  const std::vector<DataEvent>& events() const { return events_; }
+  [[nodiscard]] const std::vector<DataEvent>& events() const { return events_; }
 
   // Load stereo images for a given stereo index (lazy, from disk)
-  StereoImages loadStereo(size_t stereo_index) const;
+  [[nodiscard]] StereoImages loadStereo(size_t stereo_index) const;
 
   // Access ground truth (empty if not available)
-  const std::vector<GroundTruth>& groundTruth() const { return ground_truth_; }
+  [[nodiscard]] const std::vector<GroundTruth>& groundTruth() const { return ground_truth_; }
 
   // Find the closest ground truth entry to a timestamp (seconds)
   bool closestGroundTruth(double t, GroundTruth& out) const;

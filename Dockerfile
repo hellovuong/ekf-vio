@@ -57,12 +57,16 @@ FROM deps AS build
 WORKDIR /ws
 COPY . /ws/src/ekf_vio
 
+RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
       --packages-select ekf_vio \
       --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_TESTING=ON
+        -DBUILD_TESTING=ON \
+        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*"
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)

@@ -16,26 +16,31 @@ namespace ekf_vio {
 
 namespace fs = std::filesystem;
 
+namespace {
+
 // Nanosecond integer timestamp → seconds (double)
-static double ns_to_sec(int64_t ns) {
+double ns_to_sec(int64_t ns) {
   return static_cast<double>(ns) * 1e-9;
 }
 
 // Trim leading/trailing whitespace
-static std::string trim(const std::string& s) {
+std::string trim(const std::string& s) {
   auto start = s.find_first_not_of(" \t\r\n");
   auto end = s.find_last_not_of(" \t\r\n");
   return (start == std::string::npos) ? "" : s.substr(start, end - start + 1);
 }
 
+}  // namespace
+
 // ---------------------------------------------------------------------------
 EurocReader::EurocReader(const std::string& sequence_path) {
   // Accept either "<seq>" or "<seq>/mav0"
-  fs::path p(sequence_path);
-  if (fs::exists(p / "mav0"))
+  const fs::path p(sequence_path);
+  if (fs::exists(p / "mav0")) {
     base_path_ = (p / "mav0").string();
-  else
+  } else {
     base_path_ = p.string();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,15 +117,17 @@ bool EurocReader::loadCameraTimestamps(const std::string& cam_dir,
     if (line.empty() || line[0] == '#') continue;
 
     std::istringstream ss(line);
-    std::string ts_str, filename;
+    std::string ts_str;
+    std::string filename;
     if (!std::getline(ss, ts_str, ',')) continue;
     if (!std::getline(ss, filename, ',')) continue;
 
     ts_str = trim(ts_str);
     filename = trim(filename);
 
-    double t = ns_to_sec(std::stoll(ts_str));
-    std::string img_path = cam_dir + "/data/" + filename;
+    const double t = ns_to_sec(std::stoll(ts_str));
+    std::string img_path = cam_dir + "/data/";
+    img_path += filename;
     out.emplace_back(t, img_path);
   }
 
@@ -178,9 +185,9 @@ void EurocReader::buildTimeline() {
 
   // Sort by timestamp
   std::sort(events_.begin(), events_.end(), [this](const DataEvent& a, const DataEvent& b) {
-    double ta =
+    const double ta =
         (a.type == DataEvent::IMU) ? imu_data_[a.index].timestamp : stereo_timestamps_[a.index];
-    double tb =
+    const double tb =
         (b.type == DataEvent::IMU) ? imu_data_[b.index].timestamp : stereo_timestamps_[b.index];
     return ta < tb;
   });
