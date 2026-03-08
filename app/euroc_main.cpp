@@ -10,7 +10,6 @@
 #include "ekf_vio/logging.hpp"
 #include "ekf_vio/stereo_rectifier.hpp"
 #include "ekf_vio/stereo_tracker.hpp"
-#include "ekf_vio/stereo_vo.hpp"
 
 #include <fstream>
 #include <iomanip>
@@ -52,10 +51,7 @@ int main(int argc, char **argv) {
   // Initialise subsystems from config
   EKF ekf(cam, toNoiseParams(cfg.imu, cfg.ekf));
   StereoTracker tracker(cam, toTrackerParams(cfg.tracker));
-  StereoVO vo(cam, toVoParams(cfg.vo));
 
-  Eigen::Isometry3d T_offset = Eigen::Isometry3d::Identity();
-  bool offset_ready = false;
   bool initialized = false;
   double last_imu_time = 0.0;
   int stereo_count = 0;
@@ -122,21 +118,6 @@ int main(int argc, char **argv) {
 
         if (!features.empty())
           ekf.update(features);
-
-        // VO-based pose update (loosely coupled)
-        Eigen::Isometry3d T_wc_vo = vo.process(features);
-        if (!offset_ready) {
-          Eigen::Isometry3d T_wb0 = Eigen::Isometry3d::Identity();
-          T_wb0.linear() = ekf.state().q.toRotationMatrix();
-          T_wb0.translation() = ekf.state().p;
-          T_offset = T_wb0 * cam.T_cam_imu.inverse();
-          offset_ready = true;
-        }
-        Eigen::Isometry3d T_wb_vo = T_offset * T_wc_vo * cam.T_cam_imu;
-        ekf.updateFromPose(T_wb_vo.translation(),
-                           Eigen::Quaterniond(T_wb_vo.rotation()),
-                           cfg.ekf.vo_position_noise,
-                           cfg.ekf.vo_orientation_noise);
 
         ++stereo_count;
         const State &s = ekf.state();

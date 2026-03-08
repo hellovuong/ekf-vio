@@ -39,6 +39,7 @@ public:
     double sigma_gyro_bias = 1.9393e-5;  // rad/s²/√Hz
     double sigma_accel_bias = 3.0000e-5; // m/s³/√Hz
     double sigma_pixel = 1.5;            // pixels (reprojection noise)
+    int landmark_max_age = 5;            // keep landmarks for N frames after last observation
   };
 
   explicit EKF(const StereoCamera &cam, const NoiseParams &noise);
@@ -112,8 +113,13 @@ private:
   StereoCamera cam_;
   NoiseParams noise_;
 
-  // Landmark map: feature ID → 3-D position in world frame
-  std::unordered_map<int, Eigen::Vector3d> landmarks_;
+  // Landmark map: feature ID → world position + last-seen frame
+  struct Landmark {
+    Eigen::Vector3d p_w;
+    int last_seen_frame = 0;
+  };
+  std::unordered_map<int, Landmark> landmarks_;
+  int frame_count_ = 0;
 };
 
 } // namespace ekf_vio

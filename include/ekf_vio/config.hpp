@@ -45,6 +45,7 @@ struct EkfConfig {
   double sigma_pixel;
   double vo_position_noise;
   double vo_orientation_noise;
+  int landmark_max_age = 5;
 };
 
 struct TrackerConfig {
@@ -135,6 +136,8 @@ inline Config loadConfig(const std::string &path) {
   cfg.ekf.sigma_pixel = ekf["sigma_pixel"].as<double>();
   cfg.ekf.vo_position_noise = ekf["vo_position_noise"].as<double>();
   cfg.ekf.vo_orientation_noise = ekf["vo_orientation_noise"].as<double>();
+  if (ekf["landmark_max_age"])
+    cfg.ekf.landmark_max_age = ekf["landmark_max_age"].as<int>();
 
   // Tracker
   const auto &tr = root["tracker"];
@@ -199,6 +202,7 @@ inline EKF::NoiseParams toNoiseParams(const ImuConfig &imu,
   n.sigma_gyro_bias = imu.gyro_walk;
   n.sigma_accel_bias = imu.accel_walk;
   n.sigma_pixel = ekf.sigma_pixel;
+  n.landmark_max_age = ekf.landmark_max_age;
   return n;
 }
 

@@ -45,8 +45,9 @@ imu:
 # ── EKF tuning ────────────────────────────────────────────────
 ekf:
   sigma_pixel:          1.5     # reprojection noise (pixels)
-  vo_position_noise:    0.10    # VO pose update σ_p (metres)
-  vo_orientation_noise: 0.03    # VO pose update σ_q (radians)
+  vo_position_noise:    0.10    # VO pose update σ_p (metres)  [unused after Phase 1]
+  vo_orientation_noise: 0.03    # VO pose update σ_q (radians) [unused after Phase 1]
+  landmark_max_age:     5       # keep landmarks N frames after last observation
 
 # ── Feature Tracker ───────────────────────────────────────────
 tracker:

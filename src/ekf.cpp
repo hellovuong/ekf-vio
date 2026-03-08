@@ -18,7 +18,6 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
-#include <unordered_set>
 #include <ekf_vio/logging.hpp>
 #include <ekf_vio/math_utils.hpp>
 
@@ -81,6 +80,8 @@ void EKF::update(const std::vector<Feature> &features) {
   if (features.empty())
     return;
 
+  ++frame_count_;
+
   // Precompute transforms
   const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix(); // body→world
   const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();   // imu→cam
@@ -97,8 +98,11 @@ void EKF::update(const std::vector<Feature> &features) {
     auto it = landmarks_.find(f.id);
     if (it == landmarks_.end()) {
       // New landmark: triangulate and store in world frame
-      landmarks_[f.id] = camToWorld(f.p_c);
+      if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
+        landmarks_[f.id] = {camToWorld(f.p_c), frame_count_};
+      }
     } else {
+      it->second.last_seen_frame = frame_count_;
       meas_indices.push_back(i);
     }
   }
@@ -118,7 +122,7 @@ void EKF::update(const std::vector<Feature> &features) {
 
   for (int k = 0; k < M; ++k) {
     const Feature &f = features[meas_indices[k]];
-    const Eigen::Vector3d &p_w = landmarks_.at(f.id);
+    const Eigen::Vector3d &p_w = landmarks_.at(f.id).p_w;
 
     // Predict camera-frame point from world landmark + current state
     const Eigen::Vector3d p_c_pred = worldToCam(p_w);
@@ -182,7 +186,7 @@ void EKF::update(const std::vector<Feature> &features) {
   }
 
   // Cap to avoid oversized H matrices (keep top features by residual norm)
-  const int max_meas = 80;
+  const int max_meas = 200;
   if (static_cast<int>(residuals.size()) > max_meas) {
     // Keep features with smallest residuals (best matches)
     std::vector<int> idx(residuals.size());
@@ -253,20 +257,24 @@ void EKF::update(const std::vector<Feature> &features) {
   }
 
   // ------------------------------------------------------------------
-  // Re-initialise landmark world positions using posterior state.
-  // This prevents stale landmarks from biasing future updates.
+  // Posterior landmark refinement + age-based pruning.
+  //
+  // Re-triangulate observed landmarks using the POSTERIOR state so they
+  // stay consistent with the updated estimate.  Landmarks that are NOT
+  // observed this frame keep their old world positions — when they are
+  // re-observed later the residual encodes multi-frame drift, which
+  // provides a stronger geometric constraint than frame-to-frame.
   // ------------------------------------------------------------------
-  std::unordered_set<int> observed_ids;
   for (const auto &f : features) {
-    observed_ids.insert(f.id);
-    if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
-      landmarks_[f.id] = camToWorld(f.p_c);
+    auto it = landmarks_.find(f.id);
+    if (it != landmarks_.end() && f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
+      it->second.p_w = camToWorld(f.p_c);
     }
   }
 
-  // Prune landmarks not observed this frame
+  // Prune stale landmarks (age-based sliding window)
   for (auto it = landmarks_.begin(); it != landmarks_.end(); ) {
-    if (observed_ids.count(it->first) == 0)
+    if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age)
       it = landmarks_.erase(it);
     else
       ++it;
