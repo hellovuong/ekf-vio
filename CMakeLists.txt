@@ -27,6 +27,7 @@ find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc features2d video calib3d)
 find_package(Sophus REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Library: ekf_vio_core  (EKF + StereoTracker)
@@ -35,6 +36,7 @@ add_library(ekf_vio_core
     src/ekf.cpp
     src/stereo_tracker.cpp
     src/stereo_vo.cpp
+    src/stereo_rectifier.cpp
     src/euroc_reader.cpp
 )
 
@@ -48,6 +50,7 @@ target_link_libraries(ekf_vio_core PUBLIC
     ${OpenCV_LIBS}
     Sophus::Sophus
     spdlog::spdlog
+    yaml-cpp
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
