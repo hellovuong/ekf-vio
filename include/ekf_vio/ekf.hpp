@@ -52,8 +52,7 @@ class EKF {
   //   sigma_p: position measurement noise std-dev (metres)
   //   sigma_q: orientation measurement noise std-dev (radians)
   // -----------------------------------------------------------------------
-  void updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond& q_meas,
-                      double sigma_p, double sigma_q);
+  void updateFromPose(const Sophus::SE3d& T_meas, double sigma_p, double sigma_q);
 
   // Accessors
   const State& state() const { return state_; }
@@ -66,7 +65,7 @@ class EKF {
   // -----------------------------------------------------------------------
   struct PVQ {
     Eigen::Vector3d p, v;
-    Eigen::Quaterniond q;
+    Sophus::SO3d R;
   };
   PVQ integrateRK4(const PVQ& pvq,
                    const Eigen::Vector3d& omega_c,  // corrected gyro

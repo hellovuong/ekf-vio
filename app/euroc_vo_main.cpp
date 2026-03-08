@@ -79,11 +79,11 @@ int main(int argc, char** argv) {
                   cv::Mat rect_right;
                   rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
                   const auto features = tracker.track(rect_left, rect_right);
-                  Eigen::Isometry3d T_wc = vo.process(features);
+                  Sophus::SE3d T_wc = vo.process(features);
 
                   ++frame_count;
-                  const Eigen::Vector3d p = T_wc.translation();
-                  const Eigen::Quaterniond q(T_wc.rotation());
+                  const Eigen::Vector3d& p = T_wc.translation();
+                  const Eigen::Quaterniond& q = T_wc.unit_quaternion();
 
                   traj_out << std::fixed << std::setprecision(9) << stereo.timestamp << "," << p.x()
                            << "," << p.y() << "," << p.z() << "," << q.w() << "," << q.x() << ","

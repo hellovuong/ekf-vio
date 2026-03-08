@@ -21,7 +21,7 @@ ekf_vio::StereoCamera makeCamera() {
   cam.cx = 320.0;
   cam.cy = 240.0;
   cam.baseline = 0.11;
-  cam.T_cam_imu = Eigen::Isometry3d::Identity();
+  cam.T_cam_imu = Sophus::SE3d();
   return cam;
 }
 
@@ -67,8 +67,8 @@ std::vector<ekf_vio::Feature> buildFeatures(const ekf_vio::StereoCamera& cam,
   return features;
 }
 
-// Transform a set of 3-D points by an Isometry
-std::vector<Eigen::Vector3d> transform(const Eigen::Isometry3d& T,
+// Transform a set of 3-D points by an SE3
+std::vector<Eigen::Vector3d> transform(const Sophus::SE3d& T,
                                        const std::vector<Eigen::Vector3d>& pts) {
   std::vector<Eigen::Vector3d> out;
   out.reserve(pts.size());
@@ -77,12 +77,12 @@ std::vector<Eigen::Vector3d> transform(const Eigen::Isometry3d& T,
   return out;
 }
 
-double translationError(const Eigen::Isometry3d& a, const Eigen::Isometry3d& b) {
+double translationError(const Sophus::SE3d& a, const Sophus::SE3d& b) {
   return (a.translation() - b.translation()).norm();
 }
 
-double rotationErrorDeg(const Eigen::Isometry3d& a, const Eigen::Isometry3d& b) {
-  const Eigen::Matrix3d dR = a.rotation().transpose() * b.rotation();
+double rotationErrorDeg(const Sophus::SE3d& a, const Sophus::SE3d& b) {
+  const Eigen::Matrix3d dR = a.rotationMatrix().transpose() * b.rotationMatrix();
   const double cos_angle = std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0);
   return std::acos(cos_angle) * 180.0 / M_PI;
 }
@@ -122,8 +122,8 @@ TEST(StereoVOTest, StationaryCameraKeepsIdentityPose) {
   for (int i = 0; i < 10; ++i)
     vo.process(features);
 
-  EXPECT_NEAR(translationError(vo.pose(), Eigen::Isometry3d::Identity()), 0.0, 0.01);
-  EXPECT_NEAR(rotationErrorDeg(vo.pose(), Eigen::Isometry3d::Identity()), 0.0, 0.5);
+  EXPECT_NEAR(translationError(vo.pose(), Sophus::SE3d()), 0.0, 0.01);
+  EXPECT_NEAR(rotationErrorDeg(vo.pose(), Sophus::SE3d()), 0.0, 0.5);
 }
 
 // ==========================================================================
@@ -147,8 +147,7 @@ TEST(StereoVOTest, RecoversKnownTranslation) {
   vo.process(feat0);  // creates keyframe
 
   // Frame 1: camera moved 0.3m along X
-  Eigen::Isometry3d T_wc1 = Eigen::Isometry3d::Identity();
-  T_wc1.translation() = Eigen::Vector3d(0.3, 0.0, 0.0);
+  const Sophus::SE3d T_wc1 = Sophus::SE3d::trans(0.3, 0.0, 0.0);
   // Points in camera frame: p_c = T_cw * p_w = T_wc^{-1} * p_w
   auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
   auto feat1 = buildFeatures(cam, lm_cam1);
@@ -180,10 +179,9 @@ TEST(StereoVOTest, RecoversKnownRotationAndTranslation) {
   vo.process(feat0);
 
   // Frame 1: translate + 5° yaw
-  Eigen::Isometry3d T_wc1 = Eigen::Isometry3d::Identity();
   const double yaw = 5.0 * M_PI / 180.0;
-  T_wc1.linear() = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitY()).toRotationMatrix();
-  T_wc1.translation() = Eigen::Vector3d(0.1, -0.05, 0.2);
+  const Sophus::SE3d T_wc1(Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitY()).toRotationMatrix(),
+                           Eigen::Vector3d(0.1, -0.05, 0.2));
 
   auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
   auto feat1 = buildFeatures(cam, lm_cam1);
@@ -213,14 +211,13 @@ TEST(StereoVOTest, RejectsImplausibleMotion) {
   vo.process(feat0);
 
   // Frame 1: huge 10m jump — should be rejected
-  Eigen::Isometry3d T_wc1 = Eigen::Isometry3d::Identity();
-  T_wc1.translation() = Eigen::Vector3d(10.0, 0.0, 0.0);
+  const Sophus::SE3d T_wc1 = Sophus::SE3d::trans(10.0, 0.0, 0.0);
   auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
   auto feat1 = buildFeatures(cam, lm_cam1);
   vo.process(feat1);
 
   // Pose should still be at identity (rejected the big jump)
-  EXPECT_NEAR(translationError(vo.pose(), Eigen::Isometry3d::Identity()), 0.0, 0.01);
+  EXPECT_NEAR(translationError(vo.pose(), Sophus::SE3d()), 0.0, 0.01);
 }
 
 // ==========================================================================
@@ -276,9 +273,9 @@ TEST(StereoVOTest, MultiStepTrajectory) {
   vo.process(feat0);
 
   // Move forward in 5 steps of 0.2m along Z
-  Eigen::Isometry3d T_wc = Eigen::Isometry3d::Identity();
+  Sophus::SE3d T_wc;
   for (int step = 1; step <= 5; ++step) {
-    T_wc.translation() = Eigen::Vector3d(0.0, 0.0, 0.2 * step);
+    T_wc = Sophus::SE3d::trans(0.0, 0.0, 0.2 * step);
     auto lm_cam = transform(T_wc.inverse(), lm_world);
     auto feat = buildFeatures(cam, lm_cam);
 
@@ -310,10 +307,8 @@ TEST(StereoVOTest, EmptyFeaturesPreservePose) {
   auto lm = makeLandmarks(100, 2.0, 5.0);
   auto feat = buildFeatures(cam, lm);
   vo.process(feat);
-
-  const auto pose_before = vo.pose();
   vo.process({});  // empty
-  EXPECT_NEAR(translationError(vo.pose(), pose_before), 0.0, 1e-12);
+  EXPECT_NEAR(translationError(vo.pose(), Sophus::SE3d()), 0.0, 1e-12);
 }
 
 // ==========================================================================
@@ -323,8 +318,7 @@ TEST(StereoVOTest, SetInitialPose) {
   const auto cam = makeCamera();
   ekf_vio::StereoVO vo(cam);
 
-  Eigen::Isometry3d T_init = Eigen::Isometry3d::Identity();
-  T_init.translation() = Eigen::Vector3d(1.0, 2.0, 3.0);
+  const Sophus::SE3d T_init = Sophus::SE3d::trans(1.0, 2.0, 3.0);
   vo.setInitialPose(T_init);
 
   EXPECT_NEAR(translationError(vo.pose(), T_init), 0.0, 1e-12);

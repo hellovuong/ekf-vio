@@ -60,7 +60,7 @@ class VIONode : public rclcpp::Node {
         T_mat(r, c) = T_flat[r * 4 + c];
       }
     }
-    cam.T_cam_imu = Eigen::Isometry3d(T_mat);
+    cam.T_cam_imu = Sophus::SE3d(T_mat);
 
     EKF::NoiseParams noise;
     noise.sigma_gyro = this->get_parameter("noise.sigma_gyro").as_double();
@@ -178,8 +178,7 @@ class VIONode : public rclcpp::Node {
   void initAttitude() {
     // Default: assume camera starts level, z-axis up
     // In practice: average first N IMU readings and align gravity
-    ekf_->state().q = Eigen::Quaterniond::Identity();
-    ekf_->state().p = Eigen::Vector3d::Zero();
+    ekf_->state().T_wb = Sophus::SE3d();
     ekf_->state().v = Eigen::Vector3d::Zero();
   }
 
@@ -188,19 +187,21 @@ class VIONode : public rclcpp::Node {
   // ----------------------------------------------------------------
   void publishOdometry(const rclcpp::Time& stamp) {
     const State& s = ekf_->state();
+    const auto& pos = s.T_wb.translation();
+    const auto& quat = s.T_wb.unit_quaternion();
 
     nav_msgs::msg::Odometry odom;
     odom.header.stamp = stamp;
     odom.header.frame_id = "world";
     odom.child_frame_id = "imu";
 
-    odom.pose.pose.position.x = s.p.x();
-    odom.pose.pose.position.y = s.p.y();
-    odom.pose.pose.position.z = s.p.z();
-    odom.pose.pose.orientation.x = s.q.x();
-    odom.pose.pose.orientation.y = s.q.y();
-    odom.pose.pose.orientation.z = s.q.z();
-    odom.pose.pose.orientation.w = s.q.w();
+    odom.pose.pose.position.x = pos.x();
+    odom.pose.pose.position.y = pos.y();
+    odom.pose.pose.position.z = pos.z();
+    odom.pose.pose.orientation.x = quat.x();
+    odom.pose.pose.orientation.y = quat.y();
+    odom.pose.pose.orientation.z = quat.z();
+    odom.pose.pose.orientation.w = quat.w();
 
     odom.twist.twist.linear.x = s.v.x();
     odom.twist.twist.linear.y = s.v.y();
@@ -219,9 +220,9 @@ class VIONode : public rclcpp::Node {
     geometry_msgs::msg::TransformStamped tf;
     tf.header = odom.header;
     tf.child_frame_id = "imu";
-    tf.transform.translation.x = s.p.x();
-    tf.transform.translation.y = s.p.y();
-    tf.transform.translation.z = s.p.z();
+    tf.transform.translation.x = pos.x();
+    tf.transform.translation.y = pos.y();
+    tf.transform.translation.z = pos.z();
     tf.transform.rotation = odom.pose.pose.orientation;
     tf_broadcaster_->sendTransform(tf);
   }

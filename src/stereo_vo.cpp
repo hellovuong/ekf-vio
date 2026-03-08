@@ -26,7 +26,7 @@ int StereoVO::numKeyframeLandmarks() const {
 }
 
 // ---------------------------------------------------------------------------
-Eigen::Isometry3d StereoVO::process(const std::vector<Feature>& features) {
+Sophus::SE3d StereoVO::process(const std::vector<Feature>& features) {
   if (features.empty()) return T_wc_;
 
   // ------------------------------------------------------------------
@@ -59,15 +59,16 @@ Eigen::Isometry3d StereoVO::process(const std::vector<Feature>& features) {
   // Estimate motion via 3D-3D alignment (uses stereo depth from both frames)
   // ------------------------------------------------------------------
   if (tracked_from_kf >= params_.min_pnp_points) {
-    Eigen::Isometry3d T_kf_curr;  // T_{kf_cam ← curr_cam}
+    Sophus::SE3d T_kf_curr;  // T_{kf_cam ← curr_cam}
     int inliers = 0;
     if (solveMotion3D3D(pts_kf, pts_curr, T_kf_curr, inliers)) {
       // T_{world ← curr} = T_{world ← kf} * T_{kf ← curr}
-      Eigen::Isometry3d T_wc_candidate = keyframe_.T_wc * T_kf_curr;
+      const Sophus::SE3d T_wc_candidate = keyframe_.T_wc * T_kf_curr;
 
       // Motion sanity check: reject implausible jumps
       const double dt = (T_wc_candidate.translation() - T_wc_.translation()).norm();
-      const Eigen::Matrix3d dR = T_wc_.rotation().transpose() * T_wc_candidate.rotation();
+      const Eigen::Matrix3d dR =
+          T_wc_.rotationMatrix().transpose() * T_wc_candidate.rotationMatrix();
       const double angle_rad = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
       const double angle_deg = angle_rad * 180.0 / M_PI;
 
@@ -93,7 +94,7 @@ Eigen::Isometry3d StereoVO::process(const std::vector<Feature>& features) {
 
 // ---------------------------------------------------------------------------
 bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
-                         const std::vector<cv::Point2f>& pts_2d, Eigen::Isometry3d& T_ck,
+                         const std::vector<cv::Point2f>& pts_2d, Sophus::SE3d& T_ck,
                          int& inlier_count) const {
   const int N = static_cast<int>(pts_3d.size());
   if (N < params_.min_pnp_points) return false;
@@ -145,9 +146,7 @@ bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
   cv::cv2eigen(R_cv, R);
   cv::cv2eigen(tvec, t);
 
-  T_ck = Eigen::Isometry3d::Identity();
-  T_ck.linear() = R;
-  T_ck.translation() = t;
+  T_ck = Sophus::SE3d(Eigen::Quaterniond(R), t);
 
   return true;
 }
@@ -156,8 +155,8 @@ bool StereoVO::solvePose(const std::vector<Eigen::Vector3d>& pts_3d,
 namespace {
 
 // Rigid 3D-3D alignment using SVD (Horn's method, no scale)
-Eigen::Isometry3d alignSVD(const std::vector<Eigen::Vector3d>& src,
-                           const std::vector<Eigen::Vector3d>& dst) {
+Sophus::SE3d alignSVD(const std::vector<Eigen::Vector3d>& src,
+                      const std::vector<Eigen::Vector3d>& dst) {
   // src = points in frame A, dst = corresponding points in frame B
   // Returns T_{B <- A} such that dst[i] ≈ T * src[i]
   const int N = static_cast<int>(src.size());
@@ -183,18 +182,14 @@ Eigen::Isometry3d alignSVD(const std::vector<Eigen::Vector3d>& src,
   D(2, 2) = d;  // ensure proper rotation (det=+1)
   const Eigen::Matrix3d R = V * D * U.transpose();
   const Eigen::Vector3d t = c_dst - R * c_src;
-
-  Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-  T.linear() = R;
-  T.translation() = t;
-  return T;
+  return {Eigen::Quaterniond(R).normalized(), t};
 }
 
 }  // namespace
 
 bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
                                const std::vector<Eigen::Vector3d>& pts_curr,
-                               Eigen::Isometry3d& T_kf_curr, int& inlier_count) {
+                               Sophus::SE3d& T_kf_curr, int& inlier_count) {
   const int N = static_cast<int>(pts_kf.size());
   if (N < 3) return false;
 
@@ -205,7 +200,7 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
   std::uniform_int_distribution<int> dist(0, N - 1);
 
   int best_inliers = 0;
-  Eigen::Isometry3d best_T = Eigen::Isometry3d::Identity();
+  Sophus::SE3d best_T;
 
   for (int iter = 0; iter < max_iters; ++iter) {
     // Sample 3 random correspondences
@@ -223,7 +218,7 @@ bool StereoVO::solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
     const std::vector<Eigen::Vector3d> s_kf = {pts_kf[i0], pts_kf[i1], pts_kf[i2]};
 
     // Fit: T_{kf <- curr} such that pts_kf[i] ≈ T * pts_curr[i]
-    const Eigen::Isometry3d T_cand = alignSVD(s_curr, s_kf);
+    const Sophus::SE3d T_cand = alignSVD(s_curr, s_kf);
 
     // Count inliers
     int n_inliers = 0;

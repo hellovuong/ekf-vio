@@ -84,15 +84,13 @@ int main(int argc, char** argv) {
         if (!initialized) {
           GroundTruth gt;
           if (reader.closestGroundTruth(stereo.timestamp, gt)) {
-            ekf.state().q = gt.q;
-            ekf.state().p = gt.p;
+            ekf.state().T_wb = Sophus::SE3d(Sophus::SO3d(gt.q), gt.p);
             ekf.state().v = gt.v;
             ekf.state().b_g = gt.b_g;
             ekf.state().b_a = gt.b_a;
             log->info("Using ground truth at t={:.6f}s", stereo.timestamp);
           } else {
-            ekf.state().q = Eigen::Quaterniond::Identity();
-            ekf.state().p = Eigen::Vector3d::Zero();
+            ekf.state().T_wb = Sophus::SE3d();
             ekf.state().v = Eigen::Vector3d::Zero();
             log->info("No ground truth; starting at identity");
           }
@@ -118,20 +116,23 @@ int main(int argc, char** argv) {
 
         ++stereo_count;
         const State& s = ekf.state();
-        traj_out << std::fixed << std::setprecision(9) << stereo.timestamp << "," << s.p.x() << ","
-                 << s.p.y() << "," << s.p.z() << "," << s.q.w() << "," << s.q.x() << "," << s.q.y()
-                 << "," << s.q.z() << "\n";
+        const auto& p = s.T_wb.translation();
+        const auto& q = s.T_wb.unit_quaternion();
+        traj_out << std::fixed << std::setprecision(9) << stereo.timestamp << "," << p.x() << ","
+                 << p.y() << "," << p.z() << "," << q.w() << "," << q.x() << "," << q.y() << ","
+                 << q.z() << "\n";
 
         if (stereo_count % 100 == 0) {
           log->info("Frame {:4d}  t={:.3f}  feat={}  pos=({:.3f}, {:.3f}, {:.3f})", stereo_count,
-                    stereo.timestamp, features.size(), s.p.x(), s.p.y(), s.p.z());
+                    stereo.timestamp, features.size(), p.x(), p.y(), p.z());
         }
       });
 
   const State& s = ekf.state();
+  const auto& p_final = s.T_wb.translation();
   log->info("=== Done ===");
   log->info("Processed {} stereo frames, {} IMU samples", stereo_count, reader.numImu());
-  log->info("Final pos: ({:.3f}, {:.3f}, {:.3f})", s.p.x(), s.p.y(), s.p.z());
+  log->info("Final pos: ({:.3f}, {:.3f}, {:.3f})", p_final.x(), p_final.y(), p_final.z());
   log->info("Trajectory saved to euroc_traj.csv");
   return 0;
 }

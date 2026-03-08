@@ -3,7 +3,7 @@
 
 #pragma once
 #include <Eigen/Dense>
-#include <Eigen/Geometry>
+#include <sophus/se3.hpp>
 
 namespace ekf_vio {
 
@@ -24,11 +24,10 @@ constexpr int STATE_DIM = 16;  // full state
 constexpr int ERR_DIM = 15;    // error-state (covariance lives here)
 
 struct State {
-  Eigen::Vector3d p = Eigen::Vector3d::Zero();            // position
-  Eigen::Vector3d v = Eigen::Vector3d::Zero();            // velocity
-  Eigen::Quaterniond q = Eigen::Quaterniond::Identity();  // orientation
-  Eigen::Vector3d b_g = Eigen::Vector3d::Zero();          // gyro bias
-  Eigen::Vector3d b_a = Eigen::Vector3d::Zero();          // accel bias
+  Sophus::SE3d T_wb;                              // pose: world←body
+  Eigen::Vector3d v = Eigen::Vector3d::Zero();    // velocity
+  Eigen::Vector3d b_g = Eigen::Vector3d::Zero();  // gyro bias
+  Eigen::Vector3d b_a = Eigen::Vector3d::Zero();  // accel bias
 
   // Covariance in error-state space (15×15)
   Eigen::Matrix<double, ERR_DIM, ERR_DIM> P =
@@ -52,9 +51,9 @@ struct Feature {
 
 // Camera intrinsics & stereo extrinsics
 struct StereoCamera {
-  double fx, fy, cx, cy;        // left camera intrinsics
-  double baseline;              // metres (stereo baseline along camera X)
-  Eigen::Isometry3d T_cam_imu;  // T_{cam←imu}
+  double fx, fy, cx, cy;   // left camera intrinsics
+  double baseline;         // metres (stereo baseline along camera X)
+  Sophus::SE3d T_cam_imu;  // T_{cam←imu}
 };
 
 // Gravity constant (change if not at sea level or different planet ;)

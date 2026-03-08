@@ -26,11 +26,10 @@ void EKF::predict(const ImuData& imu, double dt) {
   const Eigen::Vector3d a_c = imu.accel - state_.b_a;
 
   // 2. Integrate state (RK4)
-  PVQ pvq{state_.p, state_.v, state_.q};
+  PVQ pvq{state_.T_wb.translation(), state_.v, state_.T_wb.so3()};
   pvq = integrateRK4(pvq, omega_c, a_c, dt);
-  state_.p = pvq.p;
+  state_.T_wb = Sophus::SE3d(pvq.R, pvq.p);
   state_.v = pvq.v;
-  state_.q = pvq.q;
 
   // 3. Compute error-state Jacobian F (15×15) and noise matrix G (15×12)
   Eigen::Matrix<double, 15, 15> F;
@@ -67,8 +66,8 @@ void EKF::update(const std::vector<Feature>& features) {
   ++frame_count_;
 
   // Precompute transforms
-  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();  // body→world
-  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();    // imu→cam
+  const Eigen::Matrix3d R_wb = state_.T_wb.rotationMatrix();     // body→world
+  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotationMatrix();  // imu→cam
   // World→camera: R_cw = R_ci * R_wb^T
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
@@ -148,7 +147,7 @@ void EKF::update(const std::vector<Feature>& features) {
 
     // ∂p_c/∂δθ: perturb R_wb → R_wb * exp([δθ]×), then R_wb^T → exp(-[δθ]×)*R_wb^T
     //   δp_c = R_ci * [R_wb^T * (p_w - p)]× * δθ
-    const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.p);
+    const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.T_wb.translation());
     const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
 
     // Stack into H (4×15)
@@ -223,9 +222,9 @@ void EKF::update(const std::vector<Feature>& features) {
     return;
   }
 
-  state_.p += dx.segment<3>(0);
+  state_.T_wb.translation() += dx.segment<3>(0);
   state_.v += dx.segment<3>(3);
-  state_.q = boxplus(state_.q, dx.segment<3>(6));
+  state_.T_wb.so3() *= Sophus::SO3d::exp(dx.segment<3>(6));
   state_.b_g += dx.segment<3>(9);
   state_.b_a += dx.segment<3>(12);
 
@@ -269,13 +268,12 @@ void EKF::update(const std::vector<Feature>& features) {
 // ---------------------------------------------------------------------------
 // UPDATE from external 6-DOF pose (loosely-coupled VO fusion)
 // ---------------------------------------------------------------------------
-void EKF::updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond& q_meas,
-                         double sigma_p, double sigma_q) {
+void EKF::updateFromPose(const Sophus::SE3d& T_meas, double sigma_p, double sigma_q) {
   // Residual: [dp; dtheta]
   Eigen::Matrix<double, 6, 1> z;
-  z.head<3>() = p_meas - state_.p;
+  z.head<3>() = T_meas.translation() - state_.T_wb.translation();
   // Orientation error in body frame: dtheta such that R_meas = R_state * exp([dtheta]x)
-  z.tail<3>() = logSO3(state_.q.toRotationMatrix().transpose() * q_meas.toRotationMatrix());
+  z.tail<3>() = (state_.T_wb.so3().inverse() * T_meas.so3()).log();
 
   if (!z.allFinite()) {
     get_logger()->warn("EKF pose update: residual contains NaN — skipping");
@@ -313,9 +311,9 @@ void EKF::updateFromPose(const Eigen::Vector3d& p_meas, const Eigen::Quaterniond
     return;
   }
 
-  state_.p += dx.segment<3>(0);
+  state_.T_wb.translation() += dx.segment<3>(0);
   state_.v += dx.segment<3>(3);
-  state_.q = boxplus(state_.q, dx.segment<3>(6));
+  state_.T_wb.so3() *= Sophus::SO3d::exp(dx.segment<3>(6));
   state_.b_g += dx.segment<3>(9);
   state_.b_a += dx.segment<3>(12);
 
@@ -332,9 +330,8 @@ EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
                            const Eigen::Vector3d& a_c, double dt) const {
   const Eigen::Vector3d g = gravity();
 
-  // For quaternion we use direct integration:  Δq = expSO3(ω * dt)
-  // k1..k4 for p and v; quaternion handled separately via expSO3
-  const Eigen::Matrix3d R = pvq.q.toRotationMatrix();
+  // RK4 for position and velocity; rotation integrated via SO3 exp map
+  const Eigen::Matrix3d R = pvq.R.matrix();
 
   // k1
   const Eigen::Vector3d dp1 = pvq.v;
@@ -342,7 +339,7 @@ EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
 
   // k2 (use mid-point velocity from k1)
   const Eigen::Vector3d v2 = pvq.v + 0.5 * dt * dv1;
-  const Eigen::Matrix3d R2 = R * expSO3(omega_c * 0.5 * dt);
+  const Eigen::Matrix3d R2 = (pvq.R * Sophus::SO3d::exp(omega_c * 0.5 * dt)).matrix();
   const Eigen::Vector3d& dp2 = v2;
   const Eigen::Vector3d dv2 = R2 * a_c + g;
 
@@ -353,14 +350,14 @@ EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
 
   // k4 (full step rotation)
   const Eigen::Vector3d v4 = pvq.v + dt * dv3;
-  const Eigen::Matrix3d R4 = R * expSO3(omega_c * dt);
+  const Eigen::Matrix3d R4 = (pvq.R * Sophus::SO3d::exp(omega_c * dt)).matrix();
   const Eigen::Vector3d& dp4 = v4;
   const Eigen::Vector3d dv4 = R4 * a_c + g;
 
   PVQ next;
   next.p = pvq.p + (dt / 6.0) * (dp1 + 2.0 * dp2 + 2.0 * dp3 + dp4);
   next.v = pvq.v + (dt / 6.0) * (dv1 + 2.0 * dv2 + 2.0 * dv3 + dv4);
-  next.q = Eigen::Quaterniond(R * expSO3(omega_c * dt)).normalized();
+  next.R = pvq.R * Sophus::SO3d::exp(omega_c * dt);
   return next;
 }
 
@@ -379,7 +376,7 @@ void EKF::computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
   F.setZero();
   G.setZero();
 
-  const Eigen::Matrix3d R = state_.q.toRotationMatrix();
+  const Eigen::Matrix3d R = state_.T_wb.rotationMatrix();
 
   // ṗ = v
   F.block<3, 3>(0, 3) = Eigen::Matrix3d::Identity();
@@ -423,19 +420,11 @@ void EKF::project(const Eigen::Vector3d& p_c, double& u_l, double& v_l, double& 
 //               p_c   = R_ci * p_imu + t_ci
 // ---------------------------------------------------------------------------
 Eigen::Vector3d EKF::camToWorld(const Eigen::Vector3d& p_c) const {
-  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
-  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
-  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
-  const Eigen::Vector3d p_imu = R_ci.transpose() * (p_c - t_ci);
-  return R_wb * p_imu + state_.p;
+  return state_.T_wb * (cam_.T_cam_imu.inverse() * p_c);
 }
 
 Eigen::Vector3d EKF::worldToCam(const Eigen::Vector3d& p_w) const {
-  const Eigen::Matrix3d R_wb = state_.q.toRotationMatrix();
-  const Eigen::Matrix3d R_ci = cam_.T_cam_imu.rotation();
-  const Eigen::Vector3d t_ci = cam_.T_cam_imu.translation();
-  const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.p);
-  return R_ci * p_imu + t_ci;
+  return cam_.T_cam_imu * (state_.T_wb.inverse() * p_w);
 }
 
 }  // namespace ekf_vio
