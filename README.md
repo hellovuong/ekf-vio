@@ -1,6 +1,7 @@
 # EKF Visual-Inertial Odometry
 
 [![CI](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml/badge.svg)](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/github/hellovuong/ekf-vio/graph/badge.svg?token=D3YZ4MI6M4)](https://codecov.io/github/hellovuong/ekf-vio)
 
 A tightly-coupled **EKF-VIO** system for a **stereo camera + 6-DOF IMU** rig,
 written in modern C++20 with Eigen, Sophus, spdlog, and ROS 2.
