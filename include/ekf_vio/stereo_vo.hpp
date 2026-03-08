@@ -15,8 +15,6 @@
 
 #include "ekf_vio/types.hpp"
 
-#include <Eigen/Geometry>
-
 #include <opencv2/core.hpp>
 
 #include <unordered_map>
@@ -43,13 +41,13 @@ class StereoVO {
   // Process one set of stereo features (output of StereoTracker::track).
   // Returns the current camera-frame pose in world coordinates: T_{world←cam}
   // -----------------------------------------------------------------------
-  Eigen::Isometry3d process(const std::vector<Feature>& features);
+  Sophus::SE3d process(const std::vector<Feature>& features);
 
   // Current pose accessor
-  const Eigen::Isometry3d& pose() const { return T_wc_; }
+  [[nodiscard]] const Sophus::SE3d& pose() const { return T_wc_; }
 
   // Set the initial world pose (e.g. from ground truth)
-  void setInitialPose(const Eigen::Isometry3d& T_wc) { T_wc_ = T_wc; }
+  void setInitialPose(const Sophus::SE3d& T_wc) { T_wc_ = T_wc; }
 
   // Statistics
   int numKeyframeLandmarks() const;
@@ -58,7 +56,7 @@ class StereoVO {
  private:
   // A keyframe stores its world pose and 3D landmarks in its camera frame
   struct Keyframe {
-    Eigen::Isometry3d T_wc = Eigen::Isometry3d::Identity();
+    Sophus::SE3d T_wc;
     // feature_id → 3D point in this keyframe's camera frame
     std::unordered_map<int, Eigen::Vector3d> landmarks;
   };
@@ -66,12 +64,12 @@ class StereoVO {
   // Solve pose of current frame relative to keyframe using PnP
   // Returns true if successful; fills T_ck (T_{curr_cam ← kf_cam})
   bool solvePose(const std::vector<Eigen::Vector3d>& pts_3d, const std::vector<cv::Point2f>& pts_2d,
-                 Eigen::Isometry3d& T_ck, int& inlier_count) const;
+                 Sophus::SE3d& T_ck, int& inlier_count) const;
 
   // Solve motion using 3D-3D alignment (SVD + RANSAC)
   // Returns true if successful; fills T_kf_curr (T_{kf_cam ← curr_cam})
   bool solveMotion3D3D(const std::vector<Eigen::Vector3d>& pts_kf,
-                       const std::vector<Eigen::Vector3d>& pts_curr, Eigen::Isometry3d& T_kf_curr,
+                       const std::vector<Eigen::Vector3d>& pts_curr, Sophus::SE3d& T_kf_curr,
                        int& inlier_count);
 
   // Decide whether to spawn a new keyframe
@@ -83,7 +81,7 @@ class StereoVO {
   StereoCamera cam_;
   Params params_;
 
-  Eigen::Isometry3d T_wc_ = Eigen::Isometry3d::Identity();  // current pose
+  Sophus::SE3d T_wc_;  // current pose
   Keyframe keyframe_;
   bool has_keyframe_ = false;
   int last_inlier_count_ = 0;

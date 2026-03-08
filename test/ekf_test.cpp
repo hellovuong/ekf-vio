@@ -23,10 +23,9 @@ ekf_vio::StereoCamera makeCamera() {
   cam.cy = 240.0;
   cam.baseline = 0.11;
   // Non-trivial cam-imu extrinsic: 90° rotation about Z
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T.block<3, 3>(0, 0) = Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-  T.block<3, 1>(0, 3) = Eigen::Vector3d(0.05, -0.02, 0.01);
-  cam.T_cam_imu = Eigen::Isometry3d(T);
+  cam.T_cam_imu =
+      Sophus::SE3d(Eigen::AngleAxisd(M_PI / 2.0, Eigen::Vector3d::UnitZ()).toRotationMatrix(),
+                   Eigen::Vector3d(0.05, -0.02, 0.01));
   return cam;
 }
 
@@ -83,9 +82,8 @@ TEST(EKFTest, StationaryIMUKeepsPosition) {
   ekf_vio::EKF ekf(cam, defaultNoise());
 
   // Start at origin, identity orientation, zero velocity
-  ekf.state().p = Eigen::Vector3d::Zero();
+  ekf.state().T_wb = Sophus::SE3d();
   ekf.state().v = Eigen::Vector3d::Zero();
-  ekf.state().q = Eigen::Quaterniond::Identity();
   ekf.state().b_g = Eigen::Vector3d::Zero();
   ekf.state().b_a = Eigen::Vector3d::Zero();
 
@@ -101,7 +99,7 @@ TEST(EKFTest, StationaryIMUKeepsPosition) {
   }
 
   // Position and velocity should remain near zero
-  EXPECT_NEAR(ekf.state().p.norm(), 0.0, 0.01);
+  EXPECT_NEAR(ekf.state().T_wb.translation().norm(), 0.0, 0.01);
   EXPECT_NEAR(ekf.state().v.norm(), 0.0, 0.01);
 }
 
@@ -112,9 +110,8 @@ TEST(EKFTest, FreeFallUnderGravity) {
   const auto cam = makeCamera();
   ekf_vio::EKF ekf(cam, defaultNoise());
 
-  ekf.state().p = Eigen::Vector3d::Zero();
+  ekf.state().T_wb = Sophus::SE3d();
   ekf.state().v = Eigen::Vector3d(1.0, 0.0, 0.0);  // 1 m/s along X
-  ekf.state().q = Eigen::Quaterniond::Identity();
   ekf.state().b_g = Eigen::Vector3d::Zero();
   ekf.state().b_a = Eigen::Vector3d::Zero();
 
@@ -132,9 +129,9 @@ TEST(EKFTest, FreeFallUnderGravity) {
 
   // After 1s: p_x = v0*t = 1.0, p_z = -0.5*g*t^2 = -4.905
   // v_x = 1.0, v_z = -g*t = -9.81
-  EXPECT_NEAR(ekf.state().p.x(), 1.0, 0.02);
-  EXPECT_NEAR(ekf.state().p.y(), 0.0, 0.02);
-  EXPECT_NEAR(ekf.state().p.z(), -0.5 * 9.81, 0.05);
+  EXPECT_NEAR(ekf.state().T_wb.translation().x(), 1.0, 0.02);
+  EXPECT_NEAR(ekf.state().T_wb.translation().y(), 0.0, 0.02);
+  EXPECT_NEAR(ekf.state().T_wb.translation().z(), -0.5 * 9.81, 0.05);
   EXPECT_NEAR(ekf.state().v.x(), 1.0, 0.02);
   EXPECT_NEAR(ekf.state().v.z(), -9.81, 0.05);
 }
@@ -146,9 +143,8 @@ TEST(EKFTest, ConstantAngularVelocity) {
   const auto cam = makeCamera();
   ekf_vio::EKF ekf(cam, defaultNoise());
 
-  ekf.state().p = Eigen::Vector3d::Zero();
+  ekf.state().T_wb = Sophus::SE3d();
   ekf.state().v = Eigen::Vector3d::Zero();
-  ekf.state().q = Eigen::Quaterniond::Identity();
   ekf.state().b_g = Eigen::Vector3d::Zero();
   ekf.state().b_a = Eigen::Vector3d::Zero();
 
@@ -169,7 +165,7 @@ TEST(EKFTest, ConstantAngularVelocity) {
   const double expected_yaw = omega_z * T;
   const Eigen::Matrix3d R_expected =
       Eigen::AngleAxisd(expected_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
-  const Eigen::Matrix3d R_actual = ekf.state().q.toRotationMatrix();
+  const Eigen::Matrix3d R_actual = ekf.state().T_wb.rotationMatrix();
   const Eigen::Matrix3d dR = R_expected.transpose() * R_actual;
   const double angle_err = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
   EXPECT_NEAR(angle_err * 180.0 / M_PI, 0.0, 0.1);  // < 0.1°
@@ -208,8 +204,9 @@ TEST(EKFTest, CamWorldRoundTrip) {
   ekf_vio::EKF ekf(cam, defaultNoise());
 
   // Set non-trivial state
-  ekf.state().p = Eigen::Vector3d(1.0, 2.0, 3.0);
-  ekf.state().q = Eigen::Quaterniond(Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()));
+  ekf.state().T_wb =
+      Sophus::SE3d(Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()).toRotationMatrix(),
+                   Eigen::Vector3d(1.0, 2.0, 3.0));
 
   // A point in camera frame
   const Eigen::Vector3d p_c(0.5, -0.3, 4.0);
@@ -234,9 +231,9 @@ TEST(EKFTest, CamWorldRoundTrip) {
   ekf.update(features);
 
   // State shouldn't change much (residuals should be near zero)
-  EXPECT_NEAR(ekf.state().p.x(), 1.0, 0.05);
-  EXPECT_NEAR(ekf.state().p.y(), 2.0, 0.05);
-  EXPECT_NEAR(ekf.state().p.z(), 3.0, 0.05);
+  EXPECT_NEAR(ekf.state().T_wb.translation().x(), 1.0, 0.05);
+  EXPECT_NEAR(ekf.state().T_wb.translation().y(), 2.0, 0.05);
+  EXPECT_NEAR(ekf.state().T_wb.translation().z(), 3.0, 0.05);
 
   // Covariance should shrink after update
   const double trace_after = ekf.state().P.trace();
@@ -250,8 +247,7 @@ TEST(EKFTest, VisualUpdateShrinksCovarianceWithConsistentFeatures) {
   const auto cam = makeCamera();
   ekf_vio::EKF ekf(cam, defaultNoise());
 
-  ekf.state().p = Eigen::Vector3d::Zero();
-  ekf.state().q = Eigen::Quaterniond::Identity();
+  ekf.state().T_wb = Sophus::SE3d();
   ekf.state().v = Eigen::Vector3d::Zero();
 
   // Inflate covariance
@@ -277,22 +273,21 @@ TEST(EKFTest, PoseUpdateCorrectsPositionError) {
   ekf_vio::EKF ekf(cam, defaultNoise());
 
   // True pose
-  const Eigen::Vector3d p_true(1.0, 2.0, 3.0);
-  const Eigen::Quaterniond q_true = Eigen::Quaterniond::Identity();
+  const Sophus::SE3d T_true(Eigen::Matrix3d::Identity(), Eigen::Vector3d(1.0, 2.0, 3.0));
 
   // EKF starts with a 0.5m position error
-  ekf.state().p = p_true + Eigen::Vector3d(0.5, -0.3, 0.2);
-  ekf.state().q = q_true;
+  ekf.state().T_wb = Sophus::SE3d(Eigen::Matrix3d::Identity(),
+                                  T_true.translation() + Eigen::Vector3d(0.5, -0.3, 0.2));
   ekf.state().v = Eigen::Vector3d::Zero();
   ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-1;
 
   // Give it a perfect pose measurement
-  ekf.updateFromPose(p_true, q_true, 0.01, 0.01);
+  ekf.updateFromPose(T_true, 0.01, 0.01);
 
   // Position should move towards the true value
-  EXPECT_NEAR(ekf.state().p.x(), p_true.x(), 0.1);
-  EXPECT_NEAR(ekf.state().p.y(), p_true.y(), 0.1);
-  EXPECT_NEAR(ekf.state().p.z(), p_true.z(), 0.1);
+  EXPECT_NEAR(ekf.state().T_wb.translation().x(), T_true.translation().x(), 0.1);
+  EXPECT_NEAR(ekf.state().T_wb.translation().y(), T_true.translation().y(), 0.1);
+  EXPECT_NEAR(ekf.state().T_wb.translation().z(), T_true.translation().z(), 0.1);
 }
 
 // ==========================================================================
@@ -302,20 +297,20 @@ TEST(EKFTest, PoseUpdateCorrectsOrientationError) {
   const auto cam = makeCamera();
   ekf_vio::EKF ekf(cam, defaultNoise());
 
-  const Eigen::Quaterniond q_true = Eigen::Quaterniond::Identity();
+  const Sophus::SE3d T_true;
 
   // 5° yaw error
-  ekf.state().p = Eigen::Vector3d::Zero();
-  ekf.state().q =
-      Eigen::Quaterniond(Eigen::AngleAxisd(5.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()));
+  ekf.state().T_wb = Sophus::SE3d(
+      Eigen::AngleAxisd(5.0 * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix(),
+      Eigen::Vector3d::Zero());
   ekf.state().v = Eigen::Vector3d::Zero();
   ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-1;
 
-  ekf.updateFromPose(Eigen::Vector3d::Zero(), q_true, 0.01, 0.01);
+  ekf.updateFromPose(T_true, 0.01, 0.01);
 
   // Orientation error should reduce
   const Eigen::Matrix3d dR =
-      q_true.toRotationMatrix().transpose() * ekf.state().q.toRotationMatrix();
+      T_true.rotationMatrix().transpose() * ekf.state().T_wb.rotationMatrix();
   const double angle_err = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
   EXPECT_NEAR(angle_err * 180.0 / M_PI, 0.0, 1.0);  // < 1°
 }
@@ -328,7 +323,7 @@ TEST(EKFTest, MeasurementJacobianNumericalCheck) {
   using namespace ekf_vio::math;
 
   const auto cam = makeCamera();
-  const Eigen::Matrix3d R_ci = cam.T_cam_imu.rotation();
+  const Eigen::Matrix3d R_ci = cam.T_cam_imu.rotationMatrix();
   const Eigen::Vector3d t_ci = cam.T_cam_imu.translation();
 
   // State

@@ -4,8 +4,7 @@
 #pragma once
 
 #include <Eigen/Dense>
-#include <Eigen/Geometry>
-#include <sophus/so3.hpp>
+#include <sophus/se3.hpp>
 
 namespace ekf_vio::math {
 

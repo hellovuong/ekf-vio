@@ -17,7 +17,7 @@ ekf_vio::StereoCamera makeCamera() {
   cam.cx = 320.0;
   cam.cy = 240.0;
   cam.baseline = 0.11;
-  cam.T_cam_imu = Eigen::Isometry3d::Identity();
+  cam.T_cam_imu = Sophus::SE3d();
   return cam;
 }
 

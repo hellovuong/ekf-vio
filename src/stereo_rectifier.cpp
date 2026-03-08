@@ -85,7 +85,7 @@ StereoCamera makeStereoCamera(const StereoRectifier& rect, const CameraConfig& c
   // T_{rect_cam←imu} = R1 * T_BS0^{-1}
   Eigen::Matrix4d T_rect = Eigen::Matrix4d::Identity();
   T_rect.block<3, 3>(0, 0) = rect.R_rect();
-  cam.T_cam_imu = Eigen::Isometry3d(T_rect * ccfg.T_BS0.inverse());
+  cam.T_cam_imu = Sophus::SE3d(T_rect * ccfg.T_BS0.inverse());
 
   return cam;
 }
@@ -97,7 +97,7 @@ StereoCamera makeStereoCamera(const StereoRectifier& rect) {
   cam.cx = rect.cx();
   cam.cy = rect.cy();
   cam.baseline = rect.baseline();
-  cam.T_cam_imu = Eigen::Isometry3d::Identity();
+  cam.T_cam_imu = Sophus::SE3d();
   return cam;
 }
 
