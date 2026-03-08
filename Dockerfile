@@ -55,18 +55,20 @@ RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
 FROM deps AS build
 
 WORKDIR /ws
-COPY . /ws/src/ekf_vio
+COPY . /ws/src/ekf-vio
 
-RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy \
+RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy lcov \
     && rm -rf /var/lib/apt/lists/*
 
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
       --packages-select ekf_vio \
       --cmake-args \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DBUILD_TESTING=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*"
+        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
+        -DCMAKE_CXX_FLAGS="--coverage" \
+        -DCMAKE_C_FLAGS="--coverage"
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)
@@ -81,6 +83,13 @@ RUN source /opt/ros/jazzy/setup.bash && \
       --packages-select ekf_vio \
       --return-code-on-test-failure && \
     colcon test-result --verbose
+
+# Generate and Filter Coverage
+RUN lcov --capture --directory build/ekf_vio --output-file coverage_raw.info \
+    --ignore-errors mismatch,gcov --rc geninfo_unexecuted_blocks=1 && \
+    # EXTRACT only your source code and REMOVE the test folder
+    lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
+    lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: dev — local development environment (default target)

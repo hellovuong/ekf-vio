@@ -22,14 +22,31 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # Build the 'test' target and name it 'reporter' so we can access it
       - name: Build and test (Docker)
         uses: docker/build-push-action@v6
         with:
           context: .
           target: test
-          push: false
+          load: true  # This loads the image into the local docker registry
+          tags: ekf-vio:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Copy the coverage file out of the finished container
+      - name: Extract coverage report
+        run: |
+          docker create --name extract ekf-vio:test
+          docker cp extract:/ws/coverage.info ./coverage.info
+          docker rm extract
+
+      # Upload to Codecov (Recommended for nice PR comments)
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.info
+          fail_ci_if_error: true
+          token: ${{ secrets.CODECOV_TOKEN }} # Get this from codecov.io
 
   # ────────────────────────────────────────────────────────────
   # Lint: run all pre-commit hooks
