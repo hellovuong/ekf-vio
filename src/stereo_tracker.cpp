@@ -138,7 +138,7 @@ void StereoTracker::detectNew(const cv::Mat& img, std::vector<cv::Point2f>& pts)
   fast->detect(img, kps, mask);
 
   // Sort by response, take strongest
-  std::sort(kps.begin(), kps.end(), [](auto& a, auto& b) { return a.response > b.response; });
+  std::ranges::sort(kps, [](auto& a, auto& b) { return a.response > b.response; });
   const int need = params_.max_features - static_cast<int>(prev_pts_.size());
   const int take = std::min(need, static_cast<int>(kps.size()));
 

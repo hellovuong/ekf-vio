@@ -26,7 +26,7 @@ void EKF::predict(const ImuData& imu, double dt) {
   const Eigen::Vector3d a_c = imu.accel - state_.b_a;
 
   // 2. Integrate state (RK4)
-  PVQ pvq{state_.T_wb.translation(), state_.v, state_.T_wb.so3()};
+  PVQ pvq{.p = state_.T_wb.translation(), .v = state_.v, .R = state_.T_wb.so3()};
   pvq = integrateRK4(pvq, omega_c, a_c, dt);
   state_.T_wb = Sophus::SE3d(pvq.R, pvq.p);
   state_.v = pvq.v;
@@ -81,7 +81,7 @@ void EKF::update(const std::vector<Feature>& features) {
     if (it == landmarks_.end()) {
       // New landmark: triangulate and store in world frame
       if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
-        landmarks_[f.id] = {camToWorld(f.p_c), frame_count_};
+        landmarks_[f.id] = {.p_w = camToWorld(f.p_c), .last_seen_frame = frame_count_};
       }
     } else {
       it->second.last_seen_frame = frame_count_;

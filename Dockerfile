@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     mold \
     git \
+    clang-19 \
+    clang-tidy-19 \
+    lcov \
     python3-colcon-common-extensions \
     libeigen3-dev \
     libopencv-dev \
@@ -27,7 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-cv-bridge \
     ros-jazzy-message-filters \
     ros-jazzy-ament-cmake-gtest \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/clang       clang       /usr/bin/clang-19       100 \
+    && update-alternatives --install /usr/bin/clang++     clang++     /usr/bin/clang++-19     100 \
+    && update-alternatives --install /usr/bin/clang-tidy  clang-tidy  /usr/bin/clang-tidy-19  100
 
 # Sophus (header-only, no apt package on Ubuntu 24.04)
 RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git /tmp/sophus && \
@@ -36,8 +42,8 @@ RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git 
     cmake --install /tmp/sophus/build && \
     rm -rf /tmp/sophus
 
-ENV CC="ccache gcc" \
-    CXX="ccache g++" \
+ENV CC=clang \
+    CXX=clang++ \
     CCACHE_DIR=/ccache \
     CCACHE_MAXSIZE=5G \
     CMAKE_GENERATOR=Ninja \
@@ -57,18 +63,16 @@ FROM deps AS build
 WORKDIR /ws
 COPY . /ws/src/ekf-vio
 
-RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy lcov \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
       --packages-select ekf_vio \
       --cmake-args \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DBUILD_TESTING=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
-        -DCMAKE_CXX_FLAGS="--coverage" \
-        -DCMAKE_C_FLAGS="--coverage"
+        -GNinja \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DBUILD_TESTING=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)
@@ -76,6 +80,20 @@ RUN source /opt/ros/jazzy/setup.bash && \
 #   docker build --target test .
 # ═══════════════════════════════════════════════════════════════
 FROM build AS test
+
+# Rebuild with coverage instrumentation (inherits the ccache from build stage)
+RUN source /opt/ros/jazzy/setup.bash && \
+    colcon build \
+      --packages-select ekf_vio \
+      --cmake-args \
+        -GNinja \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DBUILD_TESTING=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
+        -DCMAKE_CXX_FLAGS="--coverage"
 
 RUN source /opt/ros/jazzy/setup.bash && \
     source /ws/install/setup.bash && \
@@ -90,6 +108,53 @@ RUN lcov --capture --directory build/ekf_vio --output-file coverage_raw.info \
     # EXTRACT only your source code and REMOVE the test folder
     lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
     lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
+
+# ═══════════════════════════════════════════════════════════════
+# Stage: viz — build with Rerun visualization support
+#
+#   docker build --target viz -t ekf-vio-viz .
+#
+# Linux (live viewer — viewer runs on the host):
+#   Host:      rerun
+#   Container: docker run --rm -it --network host \
+#                -v /path/to/MH_01_easy:/data \
+#                ekf-vio-viz \
+#                bash -c "source /opt/ros/jazzy/setup.bash && \
+#                         source /ws/install/setup.bash && \
+#                         /ws/install/lib/ekf_vio/euroc_rerun_runner \
+#                           /data config/euroc.yaml"
+#
+# macOS / Windows (file-based — save .rrd, open on host):
+#   Container: docker run --rm -it \
+#                -v /path/to/MH_01_easy:/data \
+#                -v $(pwd)/results:/results \
+#                ekf-vio-viz \
+#                bash -c "source /opt/ros/jazzy/setup.bash && \
+#                         source /ws/install/setup.bash && \
+#                         /ws/install/lib/ekf_vio/euroc_rerun_runner \
+#                           /data config/euroc.yaml --save /results/ekf_vio.rrd"
+#   Host:      rerun results/ekf_vio.rrd
+# ═══════════════════════════════════════════════════════════════
+FROM deps AS viz
+
+WORKDIR /ws
+COPY . /ws/src/ekf-vio
+
+RUN source /opt/ros/jazzy/setup.bash && \
+    colcon build \
+      --packages-select ekf_vio \
+      --cmake-args \
+        -GNinja \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
+        -DCMAKE_C_COMPILER=clang-18 \
+        -DCMAKE_CXX_COMPILER=clang++-18 \
+        -DWITH_RERUN=ON
+
+CMD ["bash"]
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: dev — local development environment (default target)
