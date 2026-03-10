@@ -27,7 +27,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-cv-bridge \
     ros-jazzy-message-filters \
     ros-jazzy-ament-cmake-gtest \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/clang       clang       /usr/bin/clang-19       100 \
+    && update-alternatives --install /usr/bin/clang++     clang++     /usr/bin/clang++-19     100 \
+    && update-alternatives --install /usr/bin/clang-tidy  clang-tidy  /usr/bin/clang-tidy-19  100
 
 # Sophus (header-only, no apt package on Ubuntu 24.04)
 RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git /tmp/sophus && \
@@ -66,6 +69,20 @@ RUN source /opt/ros/jazzy/setup.bash && \
 #   docker build --target test .
 # ═══════════════════════════════════════════════════════════════
 FROM build AS test
+
+# Rebuild with coverage instrumentation (inherits the ccache from build stage)
+RUN source /opt/ros/jazzy/setup.bash && \
+    colcon build \
+      --packages-select ekf_vio \
+      --cmake-args \
+        -GNinja \
+        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+        -DBUILD_TESTING=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
+        -DCMAKE_CXX_FLAGS="--coverage"
 
 RUN source /opt/ros/jazzy/setup.bash && \
     source /ws/install/setup.bash && \
