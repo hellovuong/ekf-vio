@@ -16,11 +16,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ──────────────────────────────────────────────────────────────────────────────
 set(EKF_VIO_WARN_FLAGS
     -Wall -Wextra -Wpedantic -Werror
-    -Wno-unknown-warning-option   # lets clang/clang-tidy ignore GCC-specific flags
+    -Wno-unknown-warning-option  # lets clang/clang-tidy ignore GCC-specific flags
 )
 # GCC 13+ false-positives in fmt/spdlog templates
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   list(APPEND EKF_VIO_WARN_FLAGS -Wno-error=stringop-overflow -Wno-error=array-bounds)
+endif()
+
+if(USE_COVERAGE)
+    add_compile_options(--coverage)
+    add_link_options(--coverage) # <--- This is the critical line for the linker
 endif()
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -117,11 +122,7 @@ if(WITH_RERUN)
   target_link_libraries(euroc_rerun_runner PRIVATE ekf_vio_core rerun_sdk)
   target_compile_options(euroc_rerun_runner PRIVATE ${EKF_VIO_WARN_FLAGS})
   set_target_properties(euroc_rerun_runner PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*;-checks=-performance-move-const-arg")
-
-  install(TARGETS euroc_rerun_runner
-    RUNTIME DESTINATION lib/${PROJECT_NAME}
-  )
-endif()
+endif(WITH_RERUN)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Install
@@ -134,6 +135,11 @@ install(TARGETS ekf_vio_core vio_node euroc_runner euroc_vo_runner
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
+if(WITH_RERUN)
+  install(TARGETS euroc_rerun_runner
+    RUNTIME DESTINATION lib/${PROJECT_NAME})
+endif(WITH_RERUN)
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Tests
 # ──────────────────────────────────────────────────────────────────────────────
@@ -143,14 +149,17 @@ if(BUILD_TESTING)
   ament_add_gtest(stereo_tracker_test test/stereo_tracker_test.cpp)
   target_link_libraries(stereo_tracker_test ekf_vio_core)
   target_compile_options(stereo_tracker_test PRIVATE ${EKF_VIO_WARN_FLAGS})
+  set_target_properties(stereo_tracker_test PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
 
   ament_add_gtest(stereo_vo_test test/stereo_vo_test.cpp)
   target_link_libraries(stereo_vo_test ekf_vio_core)
   target_compile_options(stereo_vo_test PRIVATE ${EKF_VIO_WARN_FLAGS})
+  set_target_properties(stereo_vo_test PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
 
   ament_add_gtest(ekf_test test/ekf_test.cpp)
   target_link_libraries(ekf_test ekf_vio_core)
   target_compile_options(ekf_test PRIVATE ${EKF_VIO_WARN_FLAGS})
+  set_target_properties(ekf_test PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
 endif()
 
 ament_package()

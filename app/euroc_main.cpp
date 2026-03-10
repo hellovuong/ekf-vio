@@ -14,6 +14,7 @@
 #include "ekf_vio/stereo_rectifier.hpp"
 #include "ekf_vio/stereo_tracker.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 
@@ -58,6 +59,23 @@ int main(int argc, char** argv) {
   bool initialized = false;
   double last_imu_time = 0.0;
   int stereo_count = 0;
+
+  // Per-stage timing accumulators (microseconds)
+  using Clock = std::chrono::steady_clock;
+  double t_rectify_us = 0.0;
+  double t_track_us = 0.0;
+  double t_update_us = 0.0;
+  double t_total_us = 0.0;
+
+  auto print_timing = [&]() {
+    const auto n = static_cast<double>(stereo_count);
+    log->info("── Timing ({} frames) ──────────────────────────────────", stereo_count);
+    log->info("  Rectify : {:6.2f} ms/frame", t_rectify_us / n / 1e3);
+    log->info("  Track   : {:6.2f} ms/frame", t_track_us / n / 1e3);
+    log->info("  EKF upd : {:6.2f} ms/frame", t_update_us / n / 1e3);
+    log->info("  Total   : {:6.2f} ms/frame  →  {:.1f} Hz", t_total_us / n / 1e3,
+              n * 1e6 / t_total_us);
+  };
 
   std::ofstream traj_out("euroc_traj.csv");
   traj_out << "# timestamp,px,py,pz,qw,qx,qy,qz\n";
@@ -107,12 +125,23 @@ int main(int argc, char** argv) {
           return;
         }
 
+        const auto t0 = Clock::now();
+
         cv::Mat rect_left;
         cv::Mat rect_right;
         rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
+        const auto t1 = Clock::now();
+
         const auto features = tracker.track(rect_left, rect_right);
+        const auto t2 = Clock::now();
 
         if (!features.empty()) ekf.update(features);
+        const auto t3 = Clock::now();
+
+        t_rectify_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
+        t_track_us += std::chrono::duration<double, std::micro>(t2 - t1).count();
+        t_update_us += std::chrono::duration<double, std::micro>(t3 - t2).count();
+        t_total_us += std::chrono::duration<double, std::micro>(t3 - t0).count();
 
         ++stereo_count;
         const State& s = ekf.state();
@@ -125,8 +154,11 @@ int main(int argc, char** argv) {
         if (stereo_count % 100 == 0) {
           log->info("Frame {:4d}  t={:.3f}  feat={}  pos=({:.3f}, {:.3f}, {:.3f})", stereo_count,
                     stereo.timestamp, features.size(), p.x(), p.y(), p.z());
+          print_timing();
         }
       });
+
+  print_timing();
 
   const State& s = ekf.state();
   const auto& p_final = s.T_wb.translation();

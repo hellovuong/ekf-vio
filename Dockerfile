@@ -14,8 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     mold \
     git \
-    clang-19 \
-    clang-tidy-19 \
     lcov \
     python3-colcon-common-extensions \
     libeigen3-dev \
@@ -30,10 +28,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-cv-bridge \
     ros-jazzy-message-filters \
     ros-jazzy-ament-cmake-gtest \
-    && rm -rf /var/lib/apt/lists/* \
-    && update-alternatives --install /usr/bin/clang       clang       /usr/bin/clang-19       100 \
-    && update-alternatives --install /usr/bin/clang++     clang++     /usr/bin/clang++-19     100 \
-    && update-alternatives --install /usr/bin/clang-tidy  clang-tidy  /usr/bin/clang-tidy-19  100
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y wget lsb-release software-properties-common gnupg && \
+    wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 19 all
+
+RUN update-alternatives    --install /usr/bin/clang        clang        /usr/bin/clang-19        100 \
+    && update-alternatives --install /usr/bin/clang++      clang++      /usr/bin/clang++-19      100 \
+    && update-alternatives --install /usr/bin/clang-tidy   clang-tidy   /usr/bin/clang-tidy-19   100 \
+    && update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100 \
+    && update-alternatives --install /usr/bin/llvm-cov     llvm-cov     /usr/bin/llvm-cov-19     100 \
+    && update-alternatives --install /usr/bin/llvm-profdata llvm-profdata /usr/bin/llvm-profdata-19 100 \
+    && printf '#!/bin/bash\nexec /usr/bin/llvm-cov-19 gcov "$@"\n' > /usr/local/bin/llvm-cov-gcov \
+    && chmod +x /usr/local/bin/llvm-cov-gcov
 
 # Sophus (header-only, no apt package on Ubuntu 24.04)
 RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git /tmp/sophus && \
@@ -65,14 +72,16 @@ COPY . /ws/src/ekf-vio
 
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
       --packages-select ekf_vio \
       --cmake-args \
         -GNinja \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DBUILD_TESTING=1 \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        -DBUILD_TESTING=ON \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DUSE_COVERAGE=ON
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)
@@ -83,19 +92,6 @@ FROM build AS test
 
 # Rebuild with coverage instrumentation (inherits the ccache from build stage)
 RUN source /opt/ros/jazzy/setup.bash && \
-    colcon build \
-      --packages-select ekf_vio \
-      --cmake-args \
-        -GNinja \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DBUILD_TESTING=1 \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
-        -DCMAKE_CXX_FLAGS="--coverage"
-
-RUN source /opt/ros/jazzy/setup.bash && \
     source /ws/install/setup.bash && \
     colcon test \
       --packages-select ekf_vio \
@@ -103,9 +99,8 @@ RUN source /opt/ros/jazzy/setup.bash && \
     colcon test-result --verbose
 
 # Generate and Filter Coverage
-RUN lcov --capture --directory build/ekf_vio --output-file coverage_raw.info \
-    --ignore-errors mismatch,gcov --rc geninfo_unexecuted_blocks=1 && \
-    # EXTRACT only your source code and REMOVE the test folder
+RUN lcov --capture --no-external --config-file /ws/src/ekf-vio/.lcovrc --directory build/ekf_vio --output-file coverage_raw.info \
+    --gcov-tool /usr/local/bin/llvm-cov-gcov && \
     lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
     lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
 
@@ -142,6 +137,7 @@ COPY . /ws/src/ekf-vio
 
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
       --packages-select ekf_vio \
       --cmake-args \
         -GNinja \
@@ -149,9 +145,8 @@ RUN source /opt/ros/jazzy/setup.bash && \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
-        -DCMAKE_C_COMPILER=clang-18 \
-        -DCMAKE_CXX_COMPILER=clang++-18 \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
         -DWITH_RERUN=ON
 
 CMD ["bash"]

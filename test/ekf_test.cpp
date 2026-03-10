@@ -52,9 +52,9 @@ std::vector<ekf_vio::Feature> makeSyntheticFeatures(const ekf_vio::StereoCamera&
     // Random point in camera frame
     const Eigen::Vector3d p_c(dx(rng), dy(rng), dz(rng));
     const double inv_z = 1.0 / p_c.z();
-    const double u_l = cam.fx * p_c.x() * inv_z + cam.cx;
-    const double v_l = cam.fy * p_c.y() * inv_z + cam.cy;
-    const double u_r = cam.fx * (p_c.x() - cam.baseline) * inv_z + cam.cx;
+    const double u_l = (cam.fx * p_c.x() * inv_z) + cam.cx;
+    const double v_l = (cam.fy * p_c.y() * inv_z) + cam.cy;
+    const double u_r = (cam.fx * (p_c.x() - cam.baseline) * inv_z) + cam.cx;
     const double v_r = v_l;
 
     if (u_l < 0 || u_l > 640 || v_l < 0 || v_l > 480) continue;
@@ -356,15 +356,15 @@ TEST(EKFTest, MeasurementJacobianNumericalCheck) {
     p_plus(i) += eps;
     const Eigen::Vector3d p_imu_plus = R_wb.transpose() * (p_w - p_plus);
     const Eigen::Vector3d p_c_plus = R_ci * p_imu_plus + t_ci;
-    const double u_plus = cam.fx * p_c_plus.x() / p_c_plus.z() + cam.cx;
-    const double v_plus = cam.fy * p_c_plus.y() / p_c_plus.z() + cam.cy;
+    const double u_plus = (cam.fx * p_c_plus.x() / p_c_plus.z()) + cam.cx;
+    const double v_plus = (cam.fy * p_c_plus.y() / p_c_plus.z()) + cam.cy;
 
     Eigen::Vector3d p_minus = p;
     p_minus(i) -= eps;
     const Eigen::Vector3d p_imu_minus = R_wb.transpose() * (p_w - p_minus);
     const Eigen::Vector3d p_c_minus = R_ci * p_imu_minus + t_ci;
-    const double u_minus = cam.fx * p_c_minus.x() / p_c_minus.z() + cam.cx;
-    const double v_minus = cam.fy * p_c_minus.y() / p_c_minus.z() + cam.cy;
+    const double u_minus = (cam.fx * p_c_minus.x() / p_c_minus.z()) + cam.cx;
+    const double v_minus = (cam.fy * p_c_minus.y() / p_c_minus.z()) + cam.cy;
 
     H_p_numeric(0, i) = (u_plus - u_minus) / (2.0 * eps);
     H_p_numeric(1, i) = (v_plus - v_minus) / (2.0 * eps);
@@ -386,14 +386,14 @@ TEST(EKFTest, MeasurementJacobianNumericalCheck) {
     const Eigen::Matrix3d R_plus = R_wb * expSO3(dtheta);
     const Eigen::Vector3d p_imu_plus = R_plus.transpose() * (p_w - p);
     const Eigen::Vector3d p_c_plus = R_ci * p_imu_plus + t_ci;
-    const double u_plus = cam.fx * p_c_plus.x() / p_c_plus.z() + cam.cx;
-    const double v_plus = cam.fy * p_c_plus.y() / p_c_plus.z() + cam.cy;
+    const double u_plus = (cam.fx * p_c_plus.x() / p_c_plus.z()) + cam.cx;
+    const double v_plus = (cam.fy * p_c_plus.y() / p_c_plus.z()) + cam.cy;
 
     const Eigen::Matrix3d R_minus = R_wb * expSO3(-dtheta);
     const Eigen::Vector3d p_imu_minus = R_minus.transpose() * (p_w - p);
     const Eigen::Vector3d p_c_minus = R_ci * p_imu_minus + t_ci;
-    const double u_minus = cam.fx * p_c_minus.x() / p_c_minus.z() + cam.cx;
-    const double v_minus = cam.fy * p_c_minus.y() / p_c_minus.z() + cam.cy;
+    const double u_minus = (cam.fx * p_c_minus.x() / p_c_minus.z()) + cam.cx;
+    const double v_minus = (cam.fy * p_c_minus.y() / p_c_minus.z()) + cam.cy;
 
     H_theta_numeric(0, i) = (u_plus - u_minus) / (2.0 * eps);
     H_theta_numeric(1, i) = (v_plus - v_minus) / (2.0 * eps);

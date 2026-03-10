@@ -14,7 +14,9 @@ namespace ekf_vio {
 
 // ---------------------------------------------------------------------------
 StereoTracker::StereoTracker(StereoCamera cam, const Params& p)
-    : cam_(std::move(cam)), params_(p) {}
+    : cam_(std::move(cam)),
+      params_(p),
+      fast_detector_(cv::FastFeatureDetector::create(p.fast_threshold)) {}
 
 // ---------------------------------------------------------------------------
 std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat& img_right) {
@@ -26,10 +28,11 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   std::vector<cv::Point2f> curr_pts;
   std::vector<uchar> status_temporal;
 
-  if (!prev_left_.empty() && !prev_pts_.empty()) {
+  if (!prev_pyramid_.empty() && !prev_pts_.empty()) {
     std::vector<float> err;
     const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
-    cv::calcOpticalFlowPyrLK(prev_left_, img_left, prev_pts_, curr_pts, status_temporal, err,
+    // Pass the pre-built pyramid so OpenCV skips rebuilding it for prevImg.
+    cv::calcOpticalFlowPyrLK(prev_pyramid_, img_left, prev_pts_, curr_pts, status_temporal, err,
                              cv::Size(params_.lk_win_size, params_.lk_win_size),
                              params_.lk_max_level, criteria);
 
@@ -116,7 +119,11 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   // -----------------------------------------------------------------------
   // 6. Update state for next iteration
   // -----------------------------------------------------------------------
-  img_left.copyTo(prev_left_);
+  // Build and cache the pyramid for img_left so the next temporal LK call
+  // can use it directly without rebuilding (saves one pyramid build/frame).
+  cv::buildOpticalFlowPyramid(img_left, prev_pyramid_,
+                               cv::Size(params_.lk_win_size, params_.lk_win_size),
+                               params_.lk_max_level);
   prev_pts_ = good_left_pts;
   prev_ids_.clear();
   for (const auto& f : features)
@@ -134,8 +141,7 @@ void StereoTracker::detectNew(const cv::Mat& img, std::vector<cv::Point2f>& pts)
   }
 
   std::vector<cv::KeyPoint> kps;
-  auto fast = cv::FastFeatureDetector::create(params_.fast_threshold);
-  fast->detect(img, kps, mask);
+  fast_detector_->detect(img, kps, mask);
 
   // Sort by response, take strongest
   std::ranges::sort(kps, [](auto& a, auto& b) { return a.response > b.response; });
