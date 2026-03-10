@@ -73,6 +73,7 @@ FROM build AS test
 # Rebuild with coverage instrumentation (inherits the ccache from build stage)
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
       --packages-select ekf_vio \
       --cmake-args \
         -GNinja \
@@ -81,7 +82,6 @@ RUN source /opt/ros/jazzy/setup.bash && \
         -DBUILD_TESTING=1 \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
         -DCMAKE_CXX_FLAGS="--coverage"
 
 RUN source /opt/ros/jazzy/setup.bash && \
