@@ -10,9 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    ccache \
     ninja-build \
-    mold \
+    clang-tidy \
     git \
     lcov \
     python3-colcon-common-extensions \
@@ -30,18 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-ament-cmake-gtest \
     && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y wget lsb-release software-properties-common gnupg && \
-    wget https://apt.llvm.org/llvm.sh && chmod +x llvm.sh && ./llvm.sh 19 all
-
-RUN update-alternatives    --install /usr/bin/clang        clang        /usr/bin/clang-19        100 \
-    && update-alternatives --install /usr/bin/clang++      clang++      /usr/bin/clang++-19      100 \
-    && update-alternatives --install /usr/bin/clang-tidy   clang-tidy   /usr/bin/clang-tidy-19   100 \
-    && update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-19 100 \
-    && update-alternatives --install /usr/bin/llvm-cov     llvm-cov     /usr/bin/llvm-cov-19     100 \
-    && update-alternatives --install /usr/bin/llvm-profdata llvm-profdata /usr/bin/llvm-profdata-19 100 \
-    && printf '#!/bin/bash\nexec /usr/bin/llvm-cov-19 gcov "$@"\n' > /usr/local/bin/llvm-cov-gcov \
-    && chmod +x /usr/local/bin/llvm-cov-gcov
-
 # Sophus (header-only, no apt package on Ubuntu 24.04)
 RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git /tmp/sophus && \
     cmake -S /tmp/sophus -B /tmp/sophus/build \
@@ -49,15 +36,7 @@ RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git 
     cmake --install /tmp/sophus/build && \
     rm -rf /tmp/sophus
 
-ENV CC=clang \
-    CXX=clang++ \
-    CCACHE_DIR=/ccache \
-    CCACHE_MAXSIZE=5G \
-    CMAKE_GENERATOR=Ninja \
-    CMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" \
-    CMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
-
-RUN mkdir -p /ccache && ccache --max-size=5G
+ENV CMAKE_GENERATOR=Ninja
 
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
@@ -76,8 +55,6 @@ RUN source /opt/ros/jazzy/setup.bash && \
       --packages-select ekf_vio \
       --cmake-args \
         -GNinja \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DBUILD_TESTING=ON \
         -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
@@ -99,9 +76,9 @@ RUN source /opt/ros/jazzy/setup.bash && \
 
 # Generate and Filter Coverage
 RUN lcov --capture --config-file /ws/src/ekf-vio/.lcovrc --directory build/ekf_vio --output-file coverage_raw.info \
-    --ignore-errors mismatch,gcov,unused,inconsistent \
-    --gcov-tool /usr/local/bin/llvm-cov-gcov && \
-    lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
+        --ignore-errors mismatch,gcov,unused,inconsistent && \
+    lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info \
+        --ignore-errors mismatch,unused && \
     lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
 
 # ═══════════════════════════════════════════════════════════════
@@ -141,12 +118,8 @@ RUN source /opt/ros/jazzy/setup.bash && \
       --packages-select ekf_vio \
       --cmake-args \
         -GNinja \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-        -DCMAKE_C_COMPILER=clang \
-        -DCMAKE_CXX_COMPILER=clang++ \
         -DWITH_RERUN=ON
 
 CMD ["bash"]
