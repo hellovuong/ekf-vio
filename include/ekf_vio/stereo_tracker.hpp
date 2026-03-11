@@ -75,8 +75,7 @@ class StereoTracker {
   // Algorithm per feature:
   //   1. Extract an 11×11 patch centred on (u_L, v_L) from the left image.
   //   2. Build a 1-row search strip in the right image spanning
-  //      [u_L - stereo_search_radius, u_L] on the same row.  The initial
-  //      guess mirrors stereoMatch(): the right feature is assumed to be near
+  //      [u_L - stereo_search_radius, u_L] on the same row. The right feature is assumed to be near
   //      the same x-position as the left (small-to-moderate disparity).  This
   //      keeps the strip tight (~50 px vs ~200 px), reducing both runtime and
   //      false-match probability.
