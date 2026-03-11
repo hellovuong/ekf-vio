@@ -370,7 +370,7 @@
   <div class="slide slide-title active">
     <div class="kicker">VSLAM Engineer · VR/AR</div>
     <h1>EKF Visual-Inertial<br>Odometry</h1>
-    <div class="subtitle">Stereo Camera + IMU Tight Coupling for Real-Time 6-DOF Pose Estimation</div>
+    <div class="subtitle">Stereo Camera + IMU filter-based fusion for lightning fast 6-DOF Pose Estimation</div>
     <div class="author">
       <div style="font-weight:600; font-size:17px;">Long Vuong</div>
       <div style="color:var(--muted); font-size:13px; margin-top:4px;">Presented to <span style="color:var(--accent); font-weight:700;">Snapchat</span> — Spectacles / AR Division</div>
@@ -424,44 +424,64 @@
   <!-- ── SLIDE 3 — Architecture ─────────────────────────────── -->
   <div class="slide">
     <div class="slide-header"><span class="slide-num">03</span><h2>System Architecture</h2></div>
-    <div class="body">
-      <div class="pipeline">
-        <div class="pipe-box">IMU<div class="label">~200 Hz</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">EKF Predict<div class="label">RK4 integration</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">State T_wb, v, b</div>
-      </div>
-      <div style="height:8px;"></div>
-      <div class="pipeline">
-        <div class="pipe-box">Stereo Cams<div class="label">~20–30 Hz</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">Rectifier<div class="label">OpenCV remap</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">Tracker<div class="label">FAST + LK + RANSAC</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">3D Features<div class="label">p_c per feature</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">EKF Update<div class="label">Sequential Kalman</div></div>
-      </div>
-      <div style="height:6px;"></div>
-      <div class="cols cols-3" style="flex:1;">
-        <div class="callout callout-blue">
-          <strong>Tight coupling</strong><br>
-          Visual measurements constrain the EKF state directly — no intermediate pose estimate.
-          Residuals are reprojection errors, not relative poses.
+    <div class="body" style="justify-content:center; gap:0;">
+
+      <!--
+           IMU (200 Hz) ──→ Propagate ──────────────────────────┐
+                                                                ▼ ← shared EKF State (right column)
+           Stereo (30 Hz) ──→ Track → Triangulate → Update ────┘
+      -->
+      <div style="display:flex; align-items:stretch; gap:0; width:100%;">
+
+        <!-- Left lanes (stacked) -->
+        <div style="display:flex; flex-direction:column; gap:0; flex:1;">
+
+          <!-- IMU lane -->
+          <div style="display:flex; align-items:center; gap:0; padding-bottom:6px; border-bottom:2px solid var(--border); border-right:2px solid var(--border); border-radius:0 0 12px 0; padding-right:0;">
+            <div style="font-size:10px; color:var(--muted); white-space:nowrap; padding-right:8px;">200 Hz</div>
+            <div class="pipe-box">IMU<div class="label">ω, a</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box hl-box">Propagate<div class="label">RK4 kinematics</div></div>
+            <div class="pipe-arr" style="margin-left:auto; color:var(--border);">─</div>
+          </div>
+
+          <!-- gap between lanes -->
+          <div style="height:14px; border-right:2px solid var(--border);"></div>
+
+          <!-- Camera lane -->
+          <div style="display:flex; align-items:center; gap:0; padding-top:6px; border-top:2px solid var(--border); border-right:2px solid var(--border); border-radius:0 12px 0 0; padding-right:0;">
+            <div style="font-size:10px; color:var(--muted); white-space:nowrap; padding-right:8px;">20–30 Hz</div>
+            <div class="pipe-box">Stereo<div class="label">L + R</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box">Track<div class="label">FAST · LK · RANSAC</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box">Triangulate<div class="label">Z = f·b/d</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box hl-box">EKF Update<div class="label">Sequential Kalman</div></div>
+            <div class="pipe-arr" style="margin-left:auto; color:var(--border);">─</div>
+          </div>
+
         </div>
-        <div class="callout callout-yellow">
-          <strong>IMU role</strong><br>
-          Predicts pose between camera frames at 200 Hz. Absorbs fast rotations.
-          Provides absolute scale via gravity.
+
+        <!-- Right column: shared EKF State, vertically centered -->
+        <div style="display:flex; align-items:center; padding-left:0; flex-shrink:0;">
+          <div style="font-size:22px; color:var(--green); line-height:1; margin-right:-2px;">→</div>
+          <div class="pipe-box" style="border-color:var(--green); background:rgba(63,185,80,.10); padding:18px 14px; font-weight:700; font-size:13px; white-space:nowrap;">
+            EKF State
+            <div class="label" style="margin-top:5px;">T_wb · v · b_g · b_a</div>
+            <div class="label" style="font-size:9.5px; margin-top:2px;">P : 15 × 15</div>
+          </div>
         </div>
-        <div class="callout callout-green">
-          <strong>Stereo role</strong><br>
-          Provides metric depth without ambiguity. Corrects IMU drift.
-          Baseline ~11 cm on EuRoC rig.
-        </div>
+
       </div>
+
+      <!-- Three short tags -->
+      <div style="display:flex; gap:10px; margin-top:22px;">
+        <div class="callout callout-yellow" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>IMU</strong> — 200 Hz predict · absorbs head-shake · scale via gravity</div>
+        <div class="callout callout-blue" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>Pixel-level fusion</strong> — reprojection residuals correct pose/vel/bias · landmarks fixed from stereo (not in state)</div>
+        <div class="callout callout-green" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>Stereo</strong> — unambiguous metric depth · corrects IMU drift</div>
+      </div>
+
     </div>
   </div>
 
@@ -724,8 +744,9 @@
             <li><strong>Better linearisation:</strong> each Jacobian is evaluated against a progressively-corrected state, reducing nonlinear error</li>
           </ul>
           <div style="margin-top:12px;" class="callout callout-yellow">
-            This is the same motivation behind MSCKF (Mourikis &amp; Roumeliotis, ICRA 2007)
-            and why VIO literature prefers sequential or null-space-projected updates.
+            Each 4×4 Cholesky is inherently well-conditioned; large batch matrices suffer
+            from near-collinear features. Sequential update also progressively tightens P,
+            so later redundant features get smaller gains automatically.
           </div>
         </div>
       </div>
@@ -736,41 +757,46 @@
   <div class="slide">
     <div class="slide-header"><span class="slide-num">10</span><h2>Benchmark Results — EuRoC V1_01_easy</h2></div>
     <div class="body">
+
+      <!-- Key metrics — RPE first -->
       <div class="metrics" style="flex-shrink:0;">
-        <div class="metric-card"><div class="val">510</div><div class="unit">Hz pipeline throughput</div></div>
-        <div class="metric-card"><div class="val">0.32</div><div class="unit">m ATE RMSE</div></div>
-        <div class="metric-card"><div class="val">0.55</div><div class="unit">% drift / distance</div></div>
-        <div class="metric-card"><div class="val">98×</div><div class="unit">EKF update speedup</div></div>
+        <div class="metric-card" style="border-color:var(--accent);">
+          <div class="val">40</div><div class="unit">mm RPE trans RMSE</div>
+        </div>
+        <div class="metric-card" style="border-color:var(--accent);">
+          <div class="val">0.17°</div><div class="unit">RPE rot RMSE / frame</div>
+        </div>
+        <div class="metric-card">
+          <div class="val">1.000</div><div class="unit">scale (stereo, no drift)</div>
+        </div>
+        <div class="metric-card">
+          <div class="val">510</div><div class="unit">Hz pipeline throughput</div>
+        </div>
       </div>
-      <div class="cols cols-2" style="flex:1; margin-top:10px;">
-        <div>
-          <h3>Per-Stage Timing (After)</h3>
-          <table>
-            <thead><tr><th>Stage</th><th>Before</th><th>After</th><th>Δ</th></tr></thead>
+
+      <div class="cols cols-2" style="flex:1; margin-top:10px; overflow:hidden;">
+
+        <!-- Left: RPE plot -->
+        <div style="display:flex; flex-direction:column; gap:6px; overflow:hidden;">
+          <h3>RPE over time — V1_01_easy</h3>
+          <img src="results/rpe.png" style="width:100%; border-radius:6px; border:1px solid var(--border); object-fit:contain; flex:1; min-height:0;" alt="RPE plot">
+        </div>
+
+        <!-- Right: trajectory + numbers -->
+        <div style="display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+          <h3>Top-Down Trajectory (XY)</h3>
+          <img src="results/trajectory_xy.png" style="width:100%; border-radius:6px; border:1px solid var(--border); object-fit:contain; max-height:160px;" alt="XY trajectory">
+          <table style="font-size:12px; flex-shrink:0;">
             <tbody>
-              <tr><td>Rectify</td><td>0.55 ms</td><td>0.54 ms</td><td style="color:var(--muted)">—</td></tr>
-              <tr><td>Track</td><td>1.44 ms</td><td>1.15 ms</td><td style="color:var(--green)">−20%</td></tr>
-              <tr class="hl"><td><strong>EKF update</strong></td><td style="color:var(--red)">25.46 ms</td><td style="color:var(--green); font-weight:700;">0.26 ms</td><td style="color:var(--green); font-weight:700;">98×</td></tr>
-              <tr><td><strong>Total</strong></td><td>27.45 ms · 36 Hz</td><td style="color:var(--accent); font-weight:700;">1.96 ms · 510 Hz</td><td style="color:var(--accent); font-weight:700;">14×</td></tr>
+              <tr class="hl"><td><strong>RPE trans RMSE</strong></td><td style="color:var(--accent); font-weight:700;">0.041 m/frame</td></tr>
+              <tr class="hl"><td><strong>RPE rot RMSE</strong></td><td style="color:var(--accent); font-weight:700;">0.174 °/frame</td></tr>
+              <tr><td>ATE RMSE</td><td>0.303 m</td></tr>
+              <tr><td>Drift</td><td>0.52 %</td></tr>
+              <tr><td>Traj GT / Est</td><td>58.56 m / 58.56 m</td></tr>
             </tbody>
           </table>
         </div>
-        <div>
-          <h3>Accuracy</h3>
-          <div class="formula" style="font-size:12.5px;">
-            GT  trajectory :  58.56 m<br>
-            Est trajectory :  58.82 m<br><br>
-            ATE RMSE       :  0.322 m<br>
-            ATE Mean       :  0.295 m<br>
-            RPE Trans RMSE :  0.042 m/frame<br>
-            RPE Rot  RMSE  :  0.17 deg/frame
-          </div>
-          <div class="callout callout-green" style="margin-top:8px;">
-            Accuracy was <strong>preserved</strong> after the 98× speedup —
-            sequential and batch Kalman produce identical results for independent noise,
-            confirmed empirically: ATE 0.322 m before and after.
-          </div>
-        </div>
+
       </div>
     </div>
   </div>
@@ -785,7 +811,7 @@
           <tr><td>510 Hz VIO pipeline</td><td>&lt; 5 ms motion-to-photon budget</td><td><span class="badge badge-green">✓ Headroom for rendering</span></td></tr>
           <tr><td>Sequential Kalman</td><td>Fixed-time, real-time-safe update</td><td><span class="badge badge-green">✓ No latency spikes</span></td></tr>
           <tr><td>Stereo + IMU fusion</td><td>Metric 6-DOF indoors without GPS</td><td><span class="badge badge-green">✓ Works indoor/outdoor</span></td></tr>
-          <tr><td>0.55% drift</td><td>Stable hologram anchoring</td><td><span class="badge badge-yellow">⚠ Loop closure needed for long sessions</span></td></tr>
+          <tr><td>0.55% drift</td><td>Stable hologram anchoring</td><td><span class="badge badge-yellow">⚠ Mapping thread (loop closure) for long sessions</span></td></tr>
           <tr><td>15-D error-state EKF</td><td>Compact state for embedded SoC</td><td><span class="badge badge-green">✓ &lt; 1 MB working set</span></td></tr>
         </tbody>
       </table>
@@ -794,7 +820,7 @@
           <h3>What VR/AR Adds on Top</h3>
           <ul>
             <li><strong>Rolling-shutter correction</strong> — per-row time offset on CMOS sensors</li>
-            <li><strong>Loop closure</strong> — pose-graph backend (g2o / GTSAM) for room-scale drift</li>
+            <li><strong>Lazy mapping thread</strong> — loop closure + landmark refinement offloaded, tracking stays hard-RT</li>
             <li><strong>Multi-camera / fisheye</strong> — wide FOV tracking for head-mounted use</li>
             <li><strong>Photometric calibration</strong> — stable LK under varying indoor lighting</li>
           </ul>
@@ -804,8 +830,8 @@
           <ul>
             <li>FAST + LK maps naturally to SIMD / DSP acceleration</li>
             <li>Sequential Kalman is trivially parallelisable per feature batch</li>
-            <li>Replace LK with SuperPoint / LightGlue for textureless indoor scenes</li>
-            <li>MSCKF null-space projection reduces state size for lower-memory SoCs</li>
+            <li>Lazy mapping thread — heavy landmark management offloaded, runs when compute is free or on a separate unit (server / phone SoC)</li>
+            <li>Tracking thread stays lean: only pose propagation + pixel update, bounded latency</li>
           </ul>
         </div>
       </div>
@@ -837,12 +863,8 @@
         <div>
           <h3>Prioritised Roadmap</h3>
           <div class="roadmap-item"><span class="dot">🔴</span>Better stereo initialisation (prev-right + motion delta)</div>
-          <div class="roadmap-item"><span class="dot">🔴</span>Loop closure / relocalization (NetVLAD or DBoW3)</div>
-          <div class="roadmap-item"><span class="dot">🟡</span>MSCKF null-space projection — reduce linearisation error</div>
+          <div class="roadmap-item"><span class="dot">🟡</span>Lazy mapping thread — landmark refinement + loop closure in background; offload to server or secondary SoC when compute is free</div>
           <div class="roadmap-item"><span class="dot">🟡</span>Static initialiser — gravity alignment from first N IMU samples</div>
-          <div class="roadmap-item"><span class="dot">🟡</span>Rolling-shutter correction for phone/headset cameras</div>
-          <div class="roadmap-item"><span class="dot">🟢</span>Learned feature front-end (SuperPoint / LightGlue) for textureless scenes</div>
-          <div class="roadmap-item"><span class="dot">🟢</span>Dense depth for scene understanding (RGBD SLAM extension)</div>
         </div>
       </div>
     </div>
@@ -858,7 +880,7 @@
           <table>
             <thead><tr><th>Practice</th><th>Detail</th></tr></thead>
             <tbody>
-              <tr><td>Modern C++20</td><td><code>std::ranges</code>, concepts, structured bindings</td></tr>
+              <tr><td>Modern C++20</td><td><code>std::ranges</code>, const correctness, structured bindings</td></tr>
               <tr><td>Lie groups</td><td>Sophus SE3/SO3 — no quaternion normalisation bugs</td></tr>
               <tr><td>Test coverage</td><td>GTest for EKF predict/update, tracker, VO</td></tr>
               <tr><td>CI / Docker</td><td>GitHub Actions: build + test + lint on every PR</td></tr>
@@ -915,7 +937,7 @@
         <div class="callout callout-yellow">
           <strong>Ready to extend</strong><br>
           <span style="font-size:13px; color:var(--muted);">
-            Modular C++20 architecture: loop closure, MSCKF, learned features, and
+            Modular C++20 architecture: loop closure, lazy mapping thread, and
             rolling-shutter can be added as separate modules.
           </span>
         </div>
