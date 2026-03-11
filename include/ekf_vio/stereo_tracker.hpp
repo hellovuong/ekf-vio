@@ -30,7 +30,8 @@ class StereoTracker {
     int lk_max_level = 3;        // pyramid levels
     double min_disparity = 1.0;  // pixels  (reject degenerate stereo)
     double max_disparity = 200.0;
-    double ransac_thresh_px = 1.5;  // for outlier rejection via F-matrix
+    double ransac_thresh_px = 1.5;    // for outlier rejection via F-matrix
+    double epipolar_thresh_px = 3.0;  // max vertical disparity for rectified stereo match
     double min_track_quality = 0.001;
   };
 

@@ -29,6 +29,11 @@ if(USE_COVERAGE)
 endif()
 
 # ──────────────────────────────────────────────────────────────────────────────
+# VISUALIZATION OPTION WITH RERUN
+# ──────────────────────────────────────────────────────────────────────────────
+option(WITH_RERUN "Build with Rerun visualization by rerun" OFF)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
@@ -78,7 +83,12 @@ set_target_properties(ekf_vio_core PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warni
 add_executable(euroc_runner app/euroc_main.cpp)
 target_link_libraries(euroc_runner PRIVATE ekf_vio_core)
 target_compile_options(euroc_runner PRIVATE ${EKF_VIO_WARN_FLAGS})
-set_target_properties(euroc_runner PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
+if(WITH_RERUN)
+  set_target_properties(euroc_runner PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*;-checks=-performance-move-const-arg")
+else()
+
+  set_target_properties(euroc_runner PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
+endif()
 
 add_executable(euroc_vo_runner app/euroc_vo_main.cpp)
 target_link_libraries(euroc_vo_runner PRIVATE ekf_vio_core)
@@ -108,7 +118,6 @@ set_target_properties(vio_node PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-
 # Build with:
 #   colcon build --cmake-args -DWITH_RERUN=ON
 # ──────────────────────────────────────────────────────────────────────────────
-option(WITH_RERUN "Build Rerun visualization runner (euroc_rerun_runner)" OFF)
 
 if(WITH_RERUN)
   include(FetchContent)
@@ -118,10 +127,9 @@ if(WITH_RERUN)
   FetchContent_MakeAvailable(rerun_sdk)
   set_target_properties(rerun_sdk PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES $<TARGET_PROPERTY:rerun_sdk,INTERFACE_INCLUDE_DIRECTORIES>)
 
-  add_executable(euroc_rerun_runner app/euroc_rerun_main.cpp)
-  target_link_libraries(euroc_rerun_runner PRIVATE ekf_vio_core rerun_sdk)
-  target_compile_options(euroc_rerun_runner PRIVATE ${EKF_VIO_WARN_FLAGS})
-  set_target_properties(euroc_rerun_runner PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*;-checks=-performance-move-const-arg")
+  # euroc_runner gains optional Rerun support when built with WITH_RERUN=ON
+  target_link_libraries(euroc_runner PRIVATE rerun_sdk)
+  target_compile_definitions(euroc_runner PRIVATE EKF_VIO_WITH_RERUN)
 endif(WITH_RERUN)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -134,11 +142,6 @@ install(TARGETS ekf_vio_core vio_node euroc_runner euroc_vo_runner
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
-
-if(WITH_RERUN)
-  install(TARGETS euroc_rerun_runner
-    RUNTIME DESTINATION lib/${PROJECT_NAME})
-endif(WITH_RERUN)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tests

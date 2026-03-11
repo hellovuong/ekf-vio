@@ -90,7 +90,6 @@ RUN source /opt/ros/jazzy/setup.bash && \
 # ═══════════════════════════════════════════════════════════════
 FROM build AS test
 
-# Rebuild with coverage instrumentation (inherits the ccache from build stage)
 RUN source /opt/ros/jazzy/setup.bash && \
     source /ws/install/setup.bash && \
     colcon test \
@@ -99,7 +98,8 @@ RUN source /opt/ros/jazzy/setup.bash && \
     colcon test-result --verbose
 
 # Generate and Filter Coverage
-RUN lcov --capture --no-external --config-file /ws/src/ekf-vio/.lcovrc --directory build/ekf_vio --output-file coverage_raw.info \
+RUN lcov --capture --config-file /ws/src/ekf-vio/.lcovrc --directory build/ekf_vio --output-file coverage_raw.info \
+    --ignore-errors mismatch,gcov,unused,inconsistent \
     --gcov-tool /usr/local/bin/llvm-cov-gcov && \
     lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
     lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
@@ -161,6 +161,7 @@ FROM deps AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
+    ripgrep \
     python3-pip \
     python3-vcstool \
     python3-rosdep \

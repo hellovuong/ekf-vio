@@ -46,23 +46,38 @@ no visualisation).
 ### Accuracy — EuRoC V1_01_easy
 
 ```
-GT  trajectory length :  58.56 m
-Est trajectory length :  58.82 m
-Scale factor          :  1.000
+====================================================
+  EKF-VIO Evaluation Report
+====================================================
 
-ATE — Absolute Trajectory Error
-  RMSE   :  0.3222 m
-  Mean   :  0.2947 m
-  Median :  0.2670 m
-  Max    :  0.6518 m
+               Trajectory Statistics
+----------------------------------------------------
+  GT  trajectory length :    58.5617 m
+  Est trajectory length :    58.5617 m
+  Scale factor (Umeyama):   1.000000
 
-RPE — Relative Pose Error
-  Translation RMSE  :  0.0415 m
-  Translation Mean  :  0.0363 m
-  Rotation    RMSE  :  0.1737 deg
-  Rotation    Mean  :  0.1315 deg
+        ATE — Absolute Trajectory Error [m]
+----------------------------------------------------
+  RMSE   :   0.302531
+  Mean   :   0.272811
+  Median :   0.263252
+  Std    :   0.130763
+  Min    :   0.026047
+  Max    :   0.629476
 
-Drift  :  0.55 % of trajectory length
+             RPE — Relative Pose Error
+----------------------------------------------------
+  Trans RMSE  :   0.040809 m
+  Trans Mean  :   0.035909 m
+  Trans Median:   0.034126 m
+  Rot   RMSE  :   0.173929 deg
+  Rot   Mean  :   0.132241 deg
+  Rot   Median:   0.127442 deg
+
+                       Drift
+----------------------------------------------------
+  ATE RMSE / GT length :     0.5166 %
+====================================================
 ```
 
 ---

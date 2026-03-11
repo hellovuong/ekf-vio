@@ -76,10 +76,14 @@ void EKF::update(const std::vector<Feature>& features) {
   // World→camera: R_cw = R_ci * R_wb^T
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
+  get_logger()->debug("[EKF upd] frame={} features_in={}  landmarks_map={}", frame_count_,
+                      features.size(), landmarks_.size());
+
   // ------------------------------------------------------------------
   // Separate features into new (initialise landmark) vs tracked (measure)
   // ------------------------------------------------------------------
   std::vector<int> meas_indices;  // indices into features[] for measurement
+  int n_new_landmarks = 0;
   for (int i = 0; i < static_cast<int>(features.size()); ++i) {
     const Feature& f = features[i];
     auto it = landmarks_.find(f.id);
@@ -87,6 +91,7 @@ void EKF::update(const std::vector<Feature>& features) {
       // New landmark: triangulate and store in world frame
       if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
         landmarks_[f.id] = {.p_w = camToWorld(f.p_c), .last_seen_frame = frame_count_};
+        ++n_new_landmarks;
       }
     } else {
       it->second.last_seen_frame = frame_count_;
@@ -95,6 +100,7 @@ void EKF::update(const std::vector<Feature>& features) {
   }
 
   const int M = static_cast<int>(meas_indices.size());
+  get_logger()->debug("[EKF upd]   new_landmarks={}  meas_candidates={}", n_new_landmarks, M);
   if (M == 0) return;
 
   // ------------------------------------------------------------------
@@ -109,6 +115,10 @@ void EKF::update(const std::vector<Feature>& features) {
   residuals.reserve(M);
   jacobians.reserve(M);
 
+  int n_behind_camera = 0;
+  int n_pixel_gate_fail = 0;
+  int n_mahal_fail = 0;
+
   for (int k = 0; k < M; ++k) {
     const Feature& f = features[meas_indices[k]];
     const Eigen::Vector3d& p_w = landmarks_.at(f.id).p_w;
@@ -117,7 +127,10 @@ void EKF::update(const std::vector<Feature>& features) {
     const Eigen::Vector3d p_c_pred = worldToCam(p_w);
 
     // Skip landmarks behind the camera or too far
-    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) {
+      ++n_behind_camera;
+      continue;
+    }
 
     // Predicted stereo projection
     double eu_l = 0.0;
@@ -165,11 +178,27 @@ void EKF::update(const std::vector<Feature>& features) {
     H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;  // orientation
     H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;
 
+    // Pixel-space hard gate — independent of P size.
+    // When P is large the innovation covariance S = H P Hᵀ + R is also
+    // large, so the Mahalanobis distance of even a 100-px residual can
+    // normalise to near zero and pass the chi² threshold.  A per-component
+    // pixel cap catches bad measurements regardless of covariance state.
+    constexpr double kMaxResidualPx = 40.0;
+    if (res.cwiseAbs().maxCoeff() > kMaxResidualPx) {
+      ++n_pixel_gate_fail;
+      get_logger()->debug("[EKF upd]   pixel gate reject: res=[{:.1f},{:.1f},{:.1f},{:.1f}]",
+                          res(0), res(1), res(2), res(3));
+      continue;
+    }
+
     // Mahalanobis gating: reject outliers using innovation covariance
     const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
     const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
     const double mahal = res.transpose() * S_i.inverse() * res;
-    if (mahal > chi2_thresh) continue;
+    if (mahal > chi2_thresh) {
+      ++n_mahal_fail;
+      continue;
+    }
 
     residuals.push_back(res);
     jacobians.push_back(H_i);
@@ -195,6 +224,10 @@ void EKF::update(const std::vector<Feature>& features) {
     jacobians = std::move(j2);
   }
 
+  get_logger()->debug(
+      "[EKF upd]   gating: behind_cam={}  pixel_fail={}  mahal_fail={}  accepted={}",
+      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
+
   const auto N = static_cast<Eigen::Index>(residuals.size());
   if (N == 0) return;
 
@@ -206,17 +239,23 @@ void EKF::update(const std::vector<Feature>& features) {
   //
   // Sequential update processes each 4-DOF feature measurement
   // independently.  Each step only needs a 4×4 Cholesky, so the total
-  // cost is O(N × 15²) ≈ 2M FLOP — mathematically equivalent to the
-  // batch form for independent measurement noise.
+  // cost is O(N × 15²) ≈ 2M FLOP.
   //
-  // Strategy:
-  //   1. Gate all features using the PRIOR P (already done above).
-  //   2. Loop: update P after each feature (so later features see the
-  //      tightened covariance), accumulate state correction dx.
-  //   3. Apply dx to the state once after all features are processed.
+  // IMPORTANT — apply state correction immediately after each feature.
+  // Accumulating dx and applying it at the end is wrong: P shrinks after
+  // each step, so later features get a very small K even though their
+  // residuals (computed at the prior state) can still be large.  The
+  // result is that early features dominate the correction and later
+  // measurements are effectively ignored, causing divergence on
+  // sequences with aggressive motion.
   // ------------------------------------------------------------------
   const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
-  Eigen::Matrix<double, 15, 1> dx = Eigen::Matrix<double, 15, 1>::Zero();
+
+  get_logger()->debug("[EKF upd]   sequential update: N={}  P_trace_prior={:.4e}", N,
+                      state_.P.trace());
+
+  // Accumulate total correction for post-update diagnostics only
+  Eigen::Matrix<double, 15, 1> dx_total = Eigen::Matrix<double, 15, 1>::Zero();
 
   for (Eigen::Index k = 0; k < N; ++k) {
     const Eigen::Matrix<double, 4, 15>& H_k = jacobians[k];
@@ -230,8 +269,18 @@ void EKF::update(const std::vector<Feature>& features) {
     const Eigen::Matrix<double, 15, 4> K_k =
         state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix4d::Identity());
 
-    // Accumulate state correction (applied once at the end)
-    dx += K_k * residuals[k];
+    // State correction for this feature — apply immediately so that P and
+    // state remain consistent when the next feature is processed
+    const Eigen::Matrix<double, 15, 1> dx_k = K_k * residuals[k];
+    if (!dx_k.allFinite()) continue;
+
+    dx_total += dx_k;
+
+    state_.T_wb.translation() += dx_k.segment<3>(0);
+    state_.v += dx_k.segment<3>(3);
+    state_.T_wb.so3() *= Sophus::SO3d::exp(dx_k.segment<3>(6));
+    state_.b_g += dx_k.segment<3>(9);
+    state_.b_a += dx_k.segment<3>(12);
 
     // Covariance update — Joseph form for numerical stability
     const Eigen::Matrix<double, 15, 15> IKH = Eigen::Matrix<double, 15, 15>::Identity() - K_k * H_k;
@@ -239,17 +288,11 @@ void EKF::update(const std::vector<Feature>& features) {
     state_.P = 0.5 * (state_.P + state_.P.transpose());
   }
 
-  // Apply accumulated state correction
-  if (!dx.allFinite()) {
-    get_logger()->warn("EKF visual update: dx contains NaN — skipping");
-    return;
-  }
-
-  state_.T_wb.translation() += dx.segment<3>(0);
-  state_.v += dx.segment<3>(3);
-  state_.T_wb.so3() *= Sophus::SO3d::exp(dx.segment<3>(6));
-  state_.b_g += dx.segment<3>(9);
-  state_.b_a += dx.segment<3>(12);
+  get_logger()->debug(
+      "[EKF upd]   P_trace_post={:.4e}  dx: pos={:.4f}m  vel={:.4f}m/s  rot={:.4f}rad"
+      "  bg={:.2e}  ba={:.2e}",
+      state_.P.trace(), dx_total.segment<3>(0).norm(), dx_total.segment<3>(3).norm(),
+      dx_total.segment<3>(6).norm(), dx_total.segment<3>(9).norm(), dx_total.segment<3>(12).norm());
 
   // Enforce minimum positive-definite covariance
   if (!state_.P.allFinite()) {
