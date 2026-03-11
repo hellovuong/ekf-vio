@@ -34,6 +34,11 @@ endif()
 option(WITH_RERUN "Build with Rerun visualization by rerun" OFF)
 
 # ──────────────────────────────────────────────────────────────────────────────
+# VISUALIZATION OPTION WITH RERUN
+# ──────────────────────────────────────────────────────────────────────────────
+option(WITH_RERUN "Build with Rerun visualization by rerun" OFF)
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)

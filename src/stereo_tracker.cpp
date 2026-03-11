@@ -45,6 +45,11 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
     auto n_lk_ok = std::ranges::count_if(status_temporal, [](auto s) { return s > 0; });
     get_logger()->debug("[Tracker] temporal LK: {}/{} tracked", n_lk_ok, n_prev);
 
+    int n_lk_ok = 0;
+    for (auto s : status_temporal)
+      n_lk_ok += static_cast<int>(s > 0);
+    get_logger()->debug("[Tracker] temporal LK: {}/{} tracked", n_lk_ok, n_prev);
+
     // Reject outliers via fundamental matrix RANSAC
     if (curr_pts.size() >= 8) {
       rejectOutliers(prev_pts_, curr_pts, status_temporal);
