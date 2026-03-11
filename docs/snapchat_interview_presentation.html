@@ -394,7 +394,7 @@
       <div class="agenda-grid" style="grid-template-columns: 1fr 1fr 1fr; gap:8px;">
         <div class="agenda-item"><span class="num">01</span>Why VSLAM is Hard in VR/AR</div>
         <div class="agenda-item"><span class="num">02</span>System Architecture</div>
-        <div class="agenda-item"><span class="num">03</span>State Estimation &amp; IMU Predict</div>
+        <div class="agenda-item"><span class="num">03</span>IMU Predict — Full RK4</div>
         <div class="agenda-item"><span class="num">04</span>Feature Tracking Pipeline</div>
         <div class="agenda-item"><span class="num">05</span>EKF Visual Update</div>
         <div class="agenda-item"><span class="num">06</span>Bottleneck Discovery &amp; Fix</div>
@@ -539,46 +539,58 @@
 
   <!-- ── SLIDE 5 — IMU Predict ──────────────────────────────── -->
   <div class="slide">
-    <div class="slide-header"><span class="slide-num">05</span><h2>IMU Predict — RK4 + Error Propagation</h2></div>
+    <div class="slide-header"><span class="slide-num">05</span><h2>IMU Predict — Full RK4 Integration</h2></div>
     <div class="body">
       <div class="cols cols-2">
         <div>
           <h3>Continuous-Time Kinematics</h3>
-          <div class="formula">
+          <div class="formula" style="font-size:11.5px;">
             ṗ = v<br>
             v̇ = R·(a<sub>meas</sub>−b_a) + g<sub>w</sub><br>
             q̇ = q ⊗ [0, (ω<sub>meas</sub>−b_g)/2]<br>
             ḃ_g = 0,  ḃ_a = 0
           </div>
-          <div style="margin-top:10px;">
+          <div style="margin-top:8px;">
             <h3>F Matrix (15×15 error-state)</h3>
-            <div class="formula" style="font-size:11.5px;">
+            <div class="formula" style="font-size:10.5px;">
               F = [ 0   I    0          0   0 ]  ← δṗ<br>
               &nbsp;&nbsp;&nbsp;&nbsp;[ 0   0  −R[a<sub>c</sub>]×   0  −R ]  ← δv̇<br>
               &nbsp;&nbsp;&nbsp;&nbsp;[ 0   0  −[ω<sub>c</sub>]×   −I   0 ]  ← δθ̇<br>
-              &nbsp;&nbsp;&nbsp;&nbsp;[ 0   0    0           0   0 ]  ← δḃ_g<br>
-              &nbsp;&nbsp;&nbsp;&nbsp;[ 0   0    0           0   0 ]  ← δḃ_a
+              &nbsp;&nbsp;&nbsp;&nbsp;[ 0   0    0           0   0 ]  ← δḃ_g, δḃ_a
+            </div>
+          </div>
+          <div style="margin-top:8px;">
+            <h3>IMU Bracketing</h3>
+            <div class="formula" style="font-size:10.5px;">
+              k1 &nbsp;imu<sub>t</sub> &nbsp;·&nbsp; k2,k3 &nbsp;½(imu<sub>t</sub>+imu<sub>t+Δt</sub>) &nbsp;·&nbsp; k4 &nbsp;imu<sub>t+Δt</sub>
+            </div>
+            <div style="font-size:10px; color:var(--muted); margin-top:4px;">
+              Previous reading buffered each step — midpoint linearly interpolated.
+              F(x) re-evaluated at each stage using the intermediate state and IMU.
             </div>
           </div>
         </div>
         <div>
-          <h3>Covariance Propagation</h3>
+          <h3>Matrix ODEs — solved by RK4 in lock-step with state</h3>
+          <div class="formula" style="font-size:11.5px;">
+            Φ̇ = F(x)·Φ, &nbsp;&nbsp;&nbsp;Φ(0) = I<br>
+            Q̇_d = F·P + P·F<sup>T</sup> + GQG<sup>T</sup>, &nbsp;P(0) = 0
+          </div>
+          <div style="font-size:10px; color:var(--muted); margin-top:4px; margin-bottom:10px;">
+            Φ(Δt) = state transition matrix · Q_d(Δt) = discrete process noise
+          </div>
+          <h3>Covariance Update</h3>
           <div class="formula">
-            Φ = I + F·Δt<br>
-            P ← Φ P Φᵀ + <span style="color:var(--accent)">G·Qc·Gᵀ</span>·Δt
+            P ← Φ · P · Φᵀ + Q_d
           </div>
-          <div style="margin-top:10px;">
-            <h3>Optimisation: Precomputed G·Qc·Gᵀ</h3>
-            <div class="callout callout-yellow">
-              Every block of G·Qc·Gᵀ simplifies to <strong>σ²·I</strong> because G contains
-              ±R or ±I slices and R·Rᵀ = I. The entire 15×15 product is
-              <strong>rotation-independent and constant</strong> — computed once at construction,
-              saving a 15×12 matrix build + triple product on every one of 200 IMU calls/sec.
-            </div>
+          <div class="callout callout-yellow" style="margin-top:10px; font-size:10.5px;">
+            <strong>GQG^T precomputed once</strong> — every G block is ±R or ±I, so R·R^T = I
+            collapses the product to a constant diagonal. Used directly inside the Q̇_d ODE
+            without recomputation at each of the 4 RK4 stages × 200 Hz.
           </div>
-          <div style="margin-top:10px;" class="callout callout-blue">
-            <strong>RK4 vs Euler:</strong> At 200 Hz, Euler integration error is O(dt²) ≈ 2.5×10⁻⁵.
-            RK4 reduces this to O(dt⁴) ≈ 6×10⁻¹⁰ — critical for head-shake transients.
+          <div class="callout callout-blue" style="margin-top:8px; font-size:10.5px;">
+            <strong>O(Δt⁵) accuracy</strong> on state, Φ, and Q_d simultaneously.
+            At 200 Hz (Δt = 5 ms): integration error ≈ 3×10⁻¹³ — three orders below sensor noise floor.
           </div>
         </div>
       </div>
@@ -594,9 +606,13 @@
         <div class="pipe-arr">→</div>
         <div class="pipe-box hl-box">Temporal LK<div class="label">prev→curr left</div></div>
         <div class="pipe-arr">→</div>
-        <div class="pipe-box">F-RANSAC<div class="label">outlier reject</div></div>
+        <div class="pipe-box">E-RANSAC<div class="label">5-pt, K known</div></div>
         <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">Stereo LK<div class="label">left→right</div></div>
+        <div style="display:flex;flex-direction:column;gap:3px;align-items:center;">
+          <div class="pipe-box hl-box" style="font-size:10px;padding:4px 7px;">Optical Flow LK<div class="label">left→right init guess</div></div>
+          <div style="font-size:9px;color:var(--muted);">or</div>
+          <div class="pipe-box" style="font-size:10px;padding:4px 7px;border-color:var(--accent2);">1-D ZNCC Match<div class="label">illumination-invariant</div></div>
+        </div>
         <div class="pipe-arr">→</div>
         <div class="pipe-box">Epipolar check<div class="label">|Δy| &lt; ε px</div></div>
         <div class="pipe-arr">→</div>
@@ -604,17 +620,19 @@
       </div>
       <div class="cols cols-2" style="flex:1; margin-top:8px;">
         <div>
-          <h3>Pre-Built LK Pyramid</h3>
+          <h3>Stereo Match — Two Strategies</h3>
           <ul>
-            <li><code>buildOpticalFlowPyramid()</code> called once at frame end</li>
-            <li>Next frame reuses it — eliminates one pyramid build per frame</li>
-            <li>Also removes a full pixel-buffer deep copy</li>
+            <li><strong style="color:var(--accent)">Optical Flow LK</strong> — fast pyramid-based; initialises right search at left pixel position (<code>OPTFLOW_USE_INITIAL_FLOW</code>); epipolar row check filters bad matches</li>
+            <li><strong style="color:var(--accent2)">1-D ZNCC</strong> — searches <code>stereo_search_radius</code> px strip; <code>TM_CCOEFF_NORMED</code> is illumination-invariant (handles camera gain mismatch); parabolic sub-pixel refinement; better on challenging sequences (V1_02_medium)</li>
           </ul>
-          <h3 style="margin-top:12px;">Persistent Feature IDs</h3>
+          <h3 style="margin-top:10px;">Pre-Built LK Pyramid</h3>
           <ul>
-            <li>Each feature carries an integer ID across frames</li>
-            <li>EKF associates landmarks without re-triangulating every frame</li>
-            <li>Enables landmark age management (evict stale after N frames)</li>
+            <li><code>buildOpticalFlowPyramid()</code> once at frame end — next frame reuses it, saving one full build per frame</li>
+          </ul>
+          <h3 style="margin-top:10px;">Persistent Feature IDs</h3>
+          <ul>
+            <li>EKF associates landmarks across frames without re-triangulating</li>
+            <li>Enables age-based eviction (stale after N frames)</li>
           </ul>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;justify-content:center;">

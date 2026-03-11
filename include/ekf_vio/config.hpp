@@ -59,6 +59,7 @@ struct TrackerConfig {
   int lk_max_level;
   double min_disparity;
   double max_disparity;
+  int stereo_search_radius = 50;
   double ransac_thresh_px;
   double epipolar_thresh_px = 3.0;
 };
@@ -152,6 +153,8 @@ inline Config loadConfig(const std::string& path) {
   cfg.tracker.min_disparity = tr["min_disparity"].as<double>();
   cfg.tracker.max_disparity = tr["max_disparity"].as<double>();
   cfg.tracker.ransac_thresh_px = tr["ransac_thresh_px"].as<double>();
+  if (tr["stereo_search_radius"])
+    cfg.tracker.stereo_search_radius = tr["stereo_search_radius"].as<int>();
   if (tr["epipolar_thresh_px"])
     cfg.tracker.epipolar_thresh_px = tr["epipolar_thresh_px"].as<double>();
 
@@ -185,6 +188,7 @@ inline StereoTracker::Params toTrackerParams(const TrackerConfig& tc) {
   p.lk_max_level = tc.lk_max_level;
   p.min_disparity = tc.min_disparity;
   p.max_disparity = tc.max_disparity;
+  p.stereo_search_radius = tc.stereo_search_radius;
   p.ransac_thresh_px = tc.ransac_thresh_px;
   p.epipolar_thresh_px = tc.epipolar_thresh_px;
   return p;
