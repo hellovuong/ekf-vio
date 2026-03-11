@@ -60,6 +60,7 @@ struct TrackerConfig {
   double min_disparity;
   double max_disparity;
   double ransac_thresh_px;
+  double epipolar_thresh_px = 3.0;
 };
 
 struct VoConfig {
@@ -151,6 +152,8 @@ inline Config loadConfig(const std::string& path) {
   cfg.tracker.min_disparity = tr["min_disparity"].as<double>();
   cfg.tracker.max_disparity = tr["max_disparity"].as<double>();
   cfg.tracker.ransac_thresh_px = tr["ransac_thresh_px"].as<double>();
+  if (tr["epipolar_thresh_px"])
+    cfg.tracker.epipolar_thresh_px = tr["epipolar_thresh_px"].as<double>();
 
   // VO
   const auto& vo = root["vo"];
@@ -183,6 +186,7 @@ inline StereoTracker::Params toTrackerParams(const TrackerConfig& tc) {
   p.min_disparity = tc.min_disparity;
   p.max_disparity = tc.max_disparity;
   p.ransac_thresh_px = tc.ransac_thresh_px;
+  p.epipolar_thresh_px = tc.epipolar_thresh_px;
   return p;
 }
 

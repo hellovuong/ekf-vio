@@ -4,7 +4,11 @@
 // ============================================================================
 //  Standalone EuRoC dataset runner for EKF-VIO
 //
-//  Usage:  ./euroc_runner <path_to_sequence> [config.yaml]
+//  Usage:  ./euroc_runner <path_to_sequence> [config.yaml] [--connect [host:port]]
+//  [--save-rerun-file [file.rrd]]
+//
+//  Without Rerun flags: runs headless with per-stage timing.
+//  With --connect / --save-rerun-file: streams visualisation to Rerun (requires -DWITH_RERUN=ON).
 // ============================================================================
 
 #include "ekf_vio/config.hpp"
@@ -14,8 +18,34 @@
 #include "ekf_vio/stereo_rectifier.hpp"
 #include "ekf_vio/stereo_tracker.hpp"
 
+#include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <string>
+
+#ifdef EKF_VIO_WITH_RERUN
+#include <opencv2/imgproc.hpp>
+
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <queue>
+#include <rerun.hpp>
+#include <thread>
+#include <vector>
+
+// Data package sent from the VIO thread to the Rerun logging thread.
+struct RerunLogData {
+  double timestamp{0.0};
+  Eigen::Vector3d est_pos;
+  bool has_gt{false};
+  Eigen::Vector3d gt_pos;
+  Sophus::SE3f twc;
+  float fx{0.f}, fy{0.f}, img_w{0.f}, img_h{0.f};
+  cv::Mat rect_left;                     // grayscale; shallow-copy is safe (ref-counted)
+  std::vector<Eigen::Vector3d> pts_cam;  // raw p_c in camera frame; transform done in log thread
+};
+#endif  // EKF_VIO_WITH_RERUN
 
 using namespace ekf_vio;
 
@@ -24,12 +54,43 @@ int main(int argc, char** argv) {
   auto log = get_logger();
 
   if (argc < 2) {
-    log->error("Usage: {} <euroc_sequence_path> [config.yaml]", argv[0]);
+    log->error(
+        "Usage: {} <euroc_sequence_path> [config.yaml] [--connect [host:port]] [--save-rerun-file "
+        "[file.rrd]]",
+        argv[0]);
     return 1;
   }
 
-  // Load config
-  std::string config_path = (argc >= 3) ? argv[2] : "config/euroc.yaml";
+  // ── Parse optional Rerun flags ──────────────────────────────────────────
+  bool want_rerun = false;
+  std::string rerun_mode = "connect";
+  std::string rerun_addr = "127.0.0.1:9876";
+  std::string rerun_file = "ekf_vio.rrd";
+
+  for (int i = 3; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--connect") {
+      want_rerun = true;
+      rerun_mode = "connect";
+      if (i + 1 < argc && argv[i + 1][0] != '-') rerun_addr = argv[++i];
+    } else if (arg == "--save-rerun-file") {
+      want_rerun = true;
+      rerun_mode = "save";
+      if (i + 1 < argc && argv[i + 1][0] != '-') rerun_file = argv[++i];
+    }
+  }
+
+#ifndef EKF_VIO_WITH_RERUN
+  if (want_rerun) {
+    log->error(
+        "Rerun visualisation requested but this binary was built without Rerun support.\n"
+        "Rebuild with:  colcon build --cmake-args -DWITH_RERUN=ON");
+    return 1;
+  }
+#endif
+
+  // ── Load config ─────────────────────────────────────────────────────────
+  const std::string config_path = (argc >= 3) ? argv[2] : "config/euroc.yaml";
   Config cfg;
   try {
     cfg = loadConfig(config_path);
@@ -39,19 +100,19 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Load dataset
+  // ── Load dataset ─────────────────────────────────────────────────────────
   EurocReader reader(argv[1]);
   if (!reader.load()) {
     log->error("Failed to load EuRoC sequence from: {}", argv[1]);
     return 1;
   }
 
-  // Stereo rectification + camera setup
+  // ── Stereo rectification + camera setup ─────────────────────────────────
   StereoRectifier rectifier;
   rectifier.init(cfg.camera);
   auto cam = makeStereoCamera(rectifier, cfg.camera);
 
-  // Initialise subsystems from config
+  // ── Initialise VIO subsystems ────────────────────────────────────────────
   EKF ekf(cam, toNoiseParams(cfg.imu, cfg.ekf));
   StereoTracker tracker(cam, toTrackerParams(cfg.tracker));
 
@@ -59,10 +120,114 @@ int main(int argc, char** argv) {
   double last_imu_time = 0.0;
   int stereo_count = 0;
 
+  // ── Per-stage timing accumulators (microseconds) ─────────────────────────
+  using Clock = std::chrono::steady_clock;
+  double t_rectify_us = 0.0;
+  double t_track_us = 0.0;
+  double t_update_us = 0.0;
+  double t_total_us = 0.0;
+
+  auto print_timing = [&]() {
+    const auto n = static_cast<double>(stereo_count);
+    log->info("── Timing ({} frames) ──────────────────────────────────", stereo_count);
+    log->info("  Rectify : {:6.2f} ms/frame", t_rectify_us / n / 1e3);
+    log->info("  Track   : {:6.2f} ms/frame", t_track_us / n / 1e3);
+    log->info("  EKF upd : {:6.2f} ms/frame", t_update_us / n / 1e3);
+    log->info("  Total   : {:6.2f} ms/frame  →  {:.1f} Hz", t_total_us / n / 1e3,
+              n * 1e6 / t_total_us);
+  };
+
   std::ofstream traj_out("euroc_traj.csv");
   traj_out << "# timestamp,px,py,pz,qw,qx,qy,qz\n";
 
-  // Replay dataset
+#ifdef EKF_VIO_WITH_RERUN
+  // ── Initialise Rerun (when requested) ───────────────────────────────────
+  rerun::RecordingStream rec("ekf_vio");
+  if (want_rerun) {
+    rerun::Error err;
+    if (rerun_mode == "save-rerun-file") {
+      err = rec.save(rerun_file);
+      log->info("Rerun: saving to '{}'", rerun_file);
+    } else {
+      err = rec.connect(rerun_addr);
+      log->info("Rerun: connecting to {} (start 'rerun' on the host first)", rerun_addr);
+    }
+    if (err.is_err()) {
+      log->error("Rerun init failed (code {}): {}", static_cast<int>(err.code), err.description);
+      return 1;
+    }
+    rec.log_static("world", rerun::ViewCoordinates::RIGHT_HAND_Z_UP);
+  }
+
+  // ── Async Rerun logging thread ───────────────────────────────────────────
+  // The VIO callback packages data and pushes it; the logging thread drains
+  // it asynchronously so Rerun I/O never stalls the EKF.
+  constexpr size_t kMaxQueueSize = 8;
+  std::queue<RerunLogData> log_queue;
+  std::mutex log_mutex;
+  std::condition_variable log_cv;
+  std::atomic<bool> log_stop{false};
+
+  auto T_imu_cam = cam.T_cam_imu.inverse().cast<float>();
+
+  // Thread is started only when want_rerun is true.
+  std::thread log_thread;
+  if (want_rerun) {
+    log_thread = std::thread([&]() {
+      std::vector<rerun::Vec3D> est_traj;
+
+      while (true) {
+        RerunLogData data;
+        {
+          std::unique_lock<std::mutex> lock(log_mutex);
+          log_cv.wait(lock, [&] { return !log_queue.empty() || log_stop.load(); });
+          if (log_queue.empty()) break;
+          data = std::move(log_queue.front());
+          log_queue.pop();
+        }
+
+        rec.set_time_seconds("stable_time", data.timestamp);
+
+        // Estimated trajectory (red line strip)
+        est_traj.emplace_back(std::array<float, 3>{static_cast<float>(data.est_pos.x()),
+                                                   static_cast<float>(data.est_pos.y()),
+                                                   static_cast<float>(data.est_pos.z())});
+        rec.log("world/est_trajectory", rerun::LineStrips3D(est_traj)
+                                            .with_colors({rerun::Color(220, 50, 50)})
+                                            .with_radii({0.01f}));
+
+        // Camera pose + pinhole
+        rec.log("world/camera", rerun::Transform3D(rerun::Vec3D(data.twc.translation().data()),
+                                                   rerun::Mat3x3(data.twc.so3().matrix().data())));
+        rec.log("world/camera", rerun::Pinhole::from_focal_length_and_resolution(
+                                    {data.fx, data.fy}, {data.img_w, data.img_h}));
+
+        // Camera image (colour conversion off the VIO critical path)
+        cv::Mat rgb;
+        cv::cvtColor(data.rect_left, rgb, cv::COLOR_GRAY2RGB);
+        rec.log("world/camera",
+                rerun::Image::from_rgb24(
+                    rerun::borrow(rgb.data, rgb.total() * rgb.channels()),
+                    {static_cast<uint32_t>(rgb.cols), static_cast<uint32_t>(rgb.rows)}));
+
+        // 3D landmarks (yellow dots) — camera→world transform done here
+        if (!data.pts_cam.empty()) {
+          std::vector<std::array<float, 3>> pts3d;
+          pts3d.reserve(data.pts_cam.size());
+          for (const auto& pc : data.pts_cam) {
+            const Eigen::Vector3f p_w = data.twc * pc.cast<float>();
+            pts3d.push_back({p_w.x(), p_w.y(), p_w.z()});
+          }
+          rec.log(
+              "world/landmarks",
+              rerun::Points3D(pts3d).with_colors({rerun::Color(255, 200, 0)}).with_radii({0.01f}));
+        }
+      }
+    });
+  }
+#endif  // EKF_VIO_WITH_RERUN
+
+  // ── Replay ───────────────────────────────────────────────────────────────
   reader.replay(
       [&](const ImuData& imu) {
         if (!initialized) {
@@ -81,6 +246,7 @@ int main(int argc, char** argv) {
       [&](const StereoImages& stereo) {
         if (stereo.left.empty() || stereo.right.empty()) return;
 
+        // ── Initialisation ───────────────────────────────────────────────
         if (!initialized) {
           GroundTruth gt;
           if (reader.closestGroundTruth(stereo.timestamp, gt)) {
@@ -94,7 +260,6 @@ int main(int argc, char** argv) {
             ekf.state().v = Eigen::Vector3d::Zero();
             log->info("No ground truth; starting at identity");
           }
-
           const auto& ic = cfg.initial_covariance;
           ekf.state().P.setZero();
           ekf.state().P.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * ic.position;
@@ -107,12 +272,24 @@ int main(int argc, char** argv) {
           return;
         }
 
+        // ── VIO step ─────────────────────────────────────────────────────
+        const auto t0 = Clock::now();
+
         cv::Mat rect_left;
         cv::Mat rect_right;
         rectifier.rectify(stereo.left, stereo.right, rect_left, rect_right);
+        const auto t1 = Clock::now();
+
         const auto features = tracker.track(rect_left, rect_right);
+        const auto t2 = Clock::now();
 
         if (!features.empty()) ekf.update(features);
+        const auto t3 = Clock::now();
+
+        t_rectify_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
+        t_track_us += std::chrono::duration<double, std::micro>(t2 - t1).count();
+        t_update_us += std::chrono::duration<double, std::micro>(t3 - t2).count();
+        t_total_us += std::chrono::duration<double, std::micro>(t3 - t0).count();
 
         ++stereo_count;
         const State& s = ekf.state();
@@ -122,11 +299,59 @@ int main(int argc, char** argv) {
                  << p.y() << "," << p.z() << "," << q.w() << "," << q.x() << "," << q.y() << ","
                  << q.z() << "\n";
 
+#ifdef EKF_VIO_WITH_RERUN
+        // ── Push data to Rerun logging thread ────────────────────────────
+        if (want_rerun) {
+          auto Twc = s.T_wb.cast<float>() * T_imu_cam;
+
+          RerunLogData log_data;
+          log_data.timestamp = stereo.timestamp;
+          log_data.est_pos = p;
+          log_data.twc = Twc;
+          log_data.fx = static_cast<float>(cfg.camera.cam0.fx);
+          log_data.fy = static_cast<float>(cfg.camera.cam0.fy);
+          log_data.img_w = static_cast<float>(cfg.camera.image_width);
+          log_data.img_h = static_cast<float>(cfg.camera.image_height);
+          log_data.rect_left = rect_left;  // shallow copy; ref-count keeps data alive
+
+          GroundTruth gt;
+          if (reader.closestGroundTruth(stereo.timestamp, gt)) {
+            log_data.has_gt = true;
+            log_data.gt_pos = gt.p;
+          }
+          if (!features.empty()) {
+            log_data.pts_cam.reserve(features.size());
+            for (const auto& f : features)
+              log_data.pts_cam.push_back(f.p_c);
+          }
+
+          {
+            const std::lock_guard<std::mutex> lock(log_mutex);
+            if (log_queue.size() < kMaxQueueSize) {
+              log_queue.push(std::move(log_data));
+              log_cv.notify_one();
+            }
+            // Queue full → drop frame (visualisation is non-critical)
+          }
+        }
+#endif  // EKF_VIO_WITH_RERUN
+
         if (stereo_count % 100 == 0) {
           log->info("Frame {:4d}  t={:.3f}  feat={}  pos=({:.3f}, {:.3f}, {:.3f})", stereo_count,
                     stereo.timestamp, features.size(), p.x(), p.y(), p.z());
+          print_timing();
         }
       });
+
+#ifdef EKF_VIO_WITH_RERUN
+  if (log_thread.joinable()) {
+    log_stop = true;
+    log_cv.notify_one();
+    log_thread.join();
+  }
+#endif  // EKF_VIO_WITH_RERUN
+
+  print_timing();
 
   const State& s = ekf.state();
   const auto& p_final = s.T_wb.translation();

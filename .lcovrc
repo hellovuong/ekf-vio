@@ -1,0 +1,2 @@
+geninfo_ignore_errors = gcov,mismatch,inconsistent,unused,empty
+geninfo_unexecuted_blocks = 1

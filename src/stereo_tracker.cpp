@@ -3,6 +3,8 @@
 
 #include "ekf_vio/stereo_tracker.hpp"
 
+#include "ekf_vio/logging.hpp"
+
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/video/tracking.hpp>
@@ -14,7 +16,9 @@ namespace ekf_vio {
 
 // ---------------------------------------------------------------------------
 StereoTracker::StereoTracker(StereoCamera cam, const Params& p)
-    : cam_(std::move(cam)), params_(p) {}
+    : cam_(std::move(cam)),
+      params_(p),
+      fast_detector_(cv::FastFeatureDetector::create(p.fast_threshold)) {}
 
 // ---------------------------------------------------------------------------
 std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat& img_right) {
@@ -26,30 +30,43 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   std::vector<cv::Point2f> curr_pts;
   std::vector<uchar> status_temporal;
 
-  if (!prev_left_.empty() && !prev_pts_.empty()) {
+  const int n_prev = static_cast<int>(prev_pts_.size());
+
+  if (!prev_pyramid_.empty() && !prev_pts_.empty()) {
     std::vector<float> err;
     const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
-    cv::calcOpticalFlowPyrLK(prev_left_, img_left, prev_pts_, curr_pts, status_temporal, err,
+    // Pass the pre-built pyramid so OpenCV skips rebuilding it for prevImg.
+    // clang-format off
+    cv::calcOpticalFlowPyrLK(prev_pyramid_, img_left, prev_pts_, curr_pts, status_temporal, err,
                              cv::Size(params_.lk_win_size, params_.lk_win_size),
                              params_.lk_max_level, criteria);
+    // clang-format on
+
+    auto n_lk_ok = std::ranges::count_if(status_temporal, [](auto s) { return s > 0; });
+    get_logger()->debug("[Tracker] temporal LK: {}/{} tracked", n_lk_ok, n_prev);
 
     // Reject outliers via fundamental matrix RANSAC
     if (curr_pts.size() >= 8) {
       rejectOutliers(prev_pts_, curr_pts, status_temporal);
+
+      int n_after_ransac = 0;
+      for (auto s : status_temporal)
+        n_after_ransac += static_cast<int>(s > 0);
+      get_logger()->debug("[Tracker] F-RANSAC: {}/{} inliers ({} rejected)", n_after_ransac,
+                          n_lk_ok, n_lk_ok - n_after_ransac);
     }
   }
 
   // -----------------------------------------------------------------------
   // 2. Detect new features if we lost too many
   // -----------------------------------------------------------------------
-  int valid_count = 0;
-  for (auto s : status_temporal) {
-    valid_count += static_cast<int>(s > 0);
-  }
+  auto valid_count = std::ranges::count_if(status_temporal, [](auto s) { return s > 0; });
 
   std::vector<cv::Point2f> new_pts;
   if (valid_count < params_.max_features / 2) {
     detectNew(img_left, new_pts);
+    get_logger()->debug("[Tracker] detect new: {} new features (tracked={} < threshold={})",
+                        new_pts.size(), valid_count, params_.max_features / 2);
   }
 
   // -----------------------------------------------------------------------
@@ -85,6 +102,9 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   std::vector<cv::Point2f> good_left_pts;
   prev_pts_.clear();
 
+  int n_disparity_fail = 0;
+  int n_depth_fail = 0;
+
   for (size_t i = 0; i < left_pts_all.size(); ++i) {
     if (!status_stereo[i]) continue;
 
@@ -95,11 +115,17 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
 
     // Disparity check (horizontal stereo: left pixel is to the right of right)
     const double disparity = u_l - u_r;
-    if (disparity < params_.min_disparity || disparity > params_.max_disparity) continue;
+    if (disparity < params_.min_disparity || disparity > params_.max_disparity) {
+      ++n_disparity_fail;
+      continue;
+    }
 
     // Triangulate
     const Eigen::Vector3d p_c = triangulate(u_l, v_l, u_r);
-    if (p_c.z() < 0.2 || p_c.z() > 30.0) continue;  // depth sanity
+    if (p_c.z() < 0.2 || p_c.z() > 30.0) {
+      ++n_depth_fail;
+      continue;
+    }
 
     Feature feat;
     feat.id = (ids_all[i] >= 0) ? ids_all[i] : next_id_++;
@@ -113,10 +139,18 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
     good_left_pts.push_back(left_pts_all[i]);
   }
 
+  get_logger()->debug(
+      "[Tracker] triangulate: {} ok  |  disparity_fail={}  depth_fail={}  total_out={}",
+      features.size(), n_disparity_fail, n_depth_fail, features.size());
+
   // -----------------------------------------------------------------------
   // 6. Update state for next iteration
   // -----------------------------------------------------------------------
-  img_left.copyTo(prev_left_);
+  // Build and cache the pyramid for img_left so the next temporal LK call
+  // can use it directly without rebuilding (saves one pyramid build/frame).
+  cv::buildOpticalFlowPyramid(img_left, prev_pyramid_,
+                              cv::Size(params_.lk_win_size, params_.lk_win_size),
+                              params_.lk_max_level);
   prev_pts_ = good_left_pts;
   prev_ids_.clear();
   for (const auto& f : features)
@@ -134,11 +168,10 @@ void StereoTracker::detectNew(const cv::Mat& img, std::vector<cv::Point2f>& pts)
   }
 
   std::vector<cv::KeyPoint> kps;
-  auto fast = cv::FastFeatureDetector::create(params_.fast_threshold);
-  fast->detect(img, kps, mask);
+  fast_detector_->detect(img, kps, mask);
 
   // Sort by response, take strongest
-  std::sort(kps.begin(), kps.end(), [](auto& a, auto& b) { return a.response > b.response; });
+  std::ranges::sort(kps, [](auto& a, auto& b) { return a.response > b.response; });
   const int need = params_.max_features - static_cast<int>(prev_pts_.size());
   const int take = std::min(need, static_cast<int>(kps.size()));
 
@@ -163,13 +196,24 @@ void StereoTracker::stereoMatch(const cv::Mat& left, const cv::Mat& right,
   const cv::TermCriteria criteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
   cv::calcOpticalFlowPyrLK(left, right, left_pts, right_pts, status, err,
                            cv::Size(params_.lk_win_size, params_.lk_win_size), params_.lk_max_level,
-                           criteria);
+                           criteria, cv::OPTFLOW_USE_INITIAL_FLOW);
+
+  int n_lk_ok = 0;
+  int n_epipolar_fail = 0;
+  for (auto s : status)
+    n_lk_ok += static_cast<int>(s > 0);
 
   // Verify epipolar constraint (same row for horizontal stereo)
   for (size_t i = 0; i < left_pts.size(); ++i) {
     if (!status[i]) continue;
-    if (std::abs(left_pts[i].y - right_pts[i].y) > 2.0) status[i] = 0;
+    if (std::abs(left_pts[i].y - right_pts[i].y) > params_.epipolar_thresh_px) {
+      status[i] = 0;
+      ++n_epipolar_fail;
+    }
   }
+
+  get_logger()->debug("[Tracker] stereoMatch: lk_ok={}/{}  epipolar_fail={}  final_ok={}", n_lk_ok,
+                      left_pts.size(), n_epipolar_fail, n_lk_ok - n_epipolar_fail);
 }
 
 // ---------------------------------------------------------------------------

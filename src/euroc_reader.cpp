@@ -184,7 +184,7 @@ void EurocReader::buildTimeline() {
     events_.push_back({DataEvent::STEREO, i});
 
   // Sort by timestamp
-  std::sort(events_.begin(), events_.end(), [this](const DataEvent& a, const DataEvent& b) {
+  std::ranges::sort(events_, [this](const DataEvent& a, const DataEvent& b) {
     const double ta =
         (a.type == DataEvent::IMU) ? imu_data_[a.index].timestamp : stereo_timestamps_[a.index];
     const double tb =
@@ -214,8 +214,12 @@ bool EurocReader::closestGroundTruth(double t, GroundTruth& out) const {
   if (ground_truth_.empty()) return false;
 
   // Binary search for closest timestamp
-  auto it = std::lower_bound(ground_truth_.begin(), ground_truth_.end(), t,
-                             [](const GroundTruth& gt, double ts) { return gt.timestamp < ts; });
+  auto it = std::ranges::lower_bound(
+      ground_truth_,           // 1. The range of objects
+      t,                       // 2. The value to search for (double)
+      std::ranges::less{},     // 3. How to compare ( < )
+      &GroundTruth::timestamp  // 4. PROJECTION: Extract this for comparison
+  );
 
   if (it == ground_truth_.end()) {
     out = ground_truth_.back();

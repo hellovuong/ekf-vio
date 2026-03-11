@@ -30,7 +30,8 @@ class StereoTracker {
     int lk_max_level = 3;        // pyramid levels
     double min_disparity = 1.0;  // pixels  (reject degenerate stereo)
     double max_disparity = 200.0;
-    double ransac_thresh_px = 1.5;  // for outlier rejection via F-matrix
+    double ransac_thresh_px = 1.5;    // for outlier rejection via F-matrix
+    double epipolar_thresh_px = 3.0;  // max vertical disparity for rectified stereo match
     double min_track_quality = 0.001;
   };
 
@@ -61,8 +62,13 @@ class StereoTracker {
   StereoCamera cam_;
   Params params_;
 
+  // Cached FAST detector — avoids create() allocation on every detectNew() call
+  cv::Ptr<cv::FastFeatureDetector> fast_detector_;
+
   // Previous frame data
-  cv::Mat prev_left_;
+  // Pyramid is pre-built and stored so the next temporal LK call reuses it
+  // rather than rebuilding it from the raw image (saves one pyramid build/frame).
+  std::vector<cv::Mat> prev_pyramid_;
   std::vector<cv::Point2f> prev_pts_;
   std::vector<int> prev_ids_;            // persistent feature IDs (parallel to prev_pts_)
   std::map<int, cv::Point2f> id_to_pt_;  // feature id → left pixel

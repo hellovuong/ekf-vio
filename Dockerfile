@@ -10,10 +10,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    ccache \
     ninja-build \
-    mold \
+    clang-tidy \
     git \
+    lcov \
     python3-colcon-common-extensions \
     libeigen3-dev \
     libopencv-dev \
@@ -36,15 +36,7 @@ RUN git clone --depth 1 --branch 1.22.10 https://github.com/strasdat/Sophus.git 
     cmake --install /tmp/sophus/build && \
     rm -rf /tmp/sophus
 
-ENV CC="ccache gcc" \
-    CXX="ccache g++" \
-    CCACHE_DIR=/ccache \
-    CCACHE_MAXSIZE=5G \
-    CMAKE_GENERATOR=Ninja \
-    CMAKE_EXE_LINKER_FLAGS="-fuse-ld=mold" \
-    CMAKE_SHARED_LINKER_FLAGS="-fuse-ld=mold"
-
-RUN mkdir -p /ccache && ccache --max-size=5G
+ENV CMAKE_GENERATOR=Ninja
 
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /opt/ros/jazzy/setup.bash" >> /root/.bashrc
@@ -57,18 +49,16 @@ FROM deps AS build
 WORKDIR /ws
 COPY . /ws/src/ekf-vio
 
-RUN apt-get update && apt-get install -y --no-install-recommends clang-tidy lcov \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN source /opt/ros/jazzy/setup.bash && \
     colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
       --packages-select ekf_vio \
       --cmake-args \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -GNinja \
         -DBUILD_TESTING=ON \
-        -DCMAKE_CXX_CLANG_TIDY="clang-tidy;--warnings-as-errors=*" \
-        -DCMAKE_CXX_FLAGS="--coverage" \
-        -DCMAKE_C_FLAGS="--coverage"
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DUSE_COVERAGE=ON
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)
@@ -85,11 +75,54 @@ RUN source /opt/ros/jazzy/setup.bash && \
     colcon test-result --verbose
 
 # Generate and Filter Coverage
-RUN lcov --capture --directory build/ekf_vio --output-file coverage_raw.info \
-    --ignore-errors mismatch,gcov --rc geninfo_unexecuted_blocks=1 && \
-    # EXTRACT only your source code and REMOVE the test folder
-    lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info && \
+RUN lcov --capture --config-file /ws/src/ekf-vio/.lcovrc --directory build/ekf_vio --output-file coverage_raw.info \
+        --ignore-errors mismatch,gcov,unused,inconsistent && \
+    lcov --extract coverage_raw.info "/ws/src/ekf-vio/*" --output-file coverage_cleaned.info \
+        --ignore-errors mismatch,unused && \
     lcov --remove coverage_cleaned.info "*/test/*" --output-file /ws/coverage.info
+
+# ═══════════════════════════════════════════════════════════════
+# Stage: viz — build with Rerun visualization support
+#
+#   docker build --target viz -t ekf-vio-viz .
+#
+# Linux (live viewer — viewer runs on the host):
+#   Host:      rerun
+#   Container: docker run --rm -it --network host \
+#                -v /path/to/MH_01_easy:/data \
+#                ekf-vio-viz \
+#                bash -c "source /opt/ros/jazzy/setup.bash && \
+#                         source /ws/install/setup.bash && \
+#                         /ws/install/lib/ekf_vio/euroc_rerun_runner \
+#                           /data config/euroc.yaml"
+#
+# macOS / Windows (file-based — save .rrd, open on host):
+#   Container: docker run --rm -it \
+#                -v /path/to/MH_01_easy:/data \
+#                -v $(pwd)/results:/results \
+#                ekf-vio-viz \
+#                bash -c "source /opt/ros/jazzy/setup.bash && \
+#                         source /ws/install/setup.bash && \
+#                         /ws/install/lib/ekf_vio/euroc_rerun_runner \
+#                           /data config/euroc.yaml --save /results/ekf_vio.rrd"
+#   Host:      rerun results/ekf_vio.rrd
+# ═══════════════════════════════════════════════════════════════
+FROM deps AS viz
+
+WORKDIR /ws
+COPY . /ws/src/ekf-vio
+
+RUN source /opt/ros/jazzy/setup.bash && \
+    colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
+      --packages-select ekf_vio \
+      --cmake-args \
+        -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DWITH_RERUN=ON
+
+CMD ["bash"]
 
 # ═══════════════════════════════════════════════════════════════
 # Stage: dev — local development environment (default target)
@@ -101,6 +134,7 @@ FROM deps AS dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
+    ripgrep \
     python3-pip \
     python3-vcstool \
     python3-rosdep \

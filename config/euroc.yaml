@@ -58,6 +58,7 @@ tracker:
   min_disparity:     1.0     # pixels
   max_disparity:     200.0   # pixels
   ransac_thresh_px:  1.5     # fundamental matrix RANSAC
+  epipolar_thresh_px: 3.0   # max vertical disparity for rectified stereo (px)
 
 # ── Visual Odometry ───────────────────────────────────────────
 vo:

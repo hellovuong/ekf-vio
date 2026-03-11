@@ -5,6 +5,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <unordered_set>
 
@@ -36,7 +37,7 @@ double medianDepth(const std::vector<ekf_vio::Feature>& features) {
   z.reserve(features.size());
   for (const auto& f : features)
     z.push_back(f.p_c.z());
-  std::sort(z.begin(), z.end());
+  std::ranges::sort(z);
   return z[z.size() / 2];
 }
 

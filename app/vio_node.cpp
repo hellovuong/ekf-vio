@@ -57,7 +57,7 @@ class VIONode : public rclcpp::Node {
     Eigen::Matrix4d T_mat;
     for (int r = 0; r < 4; ++r) {
       for (int c = 0; c < 4; ++c) {
-        T_mat(r, c) = T_flat[r * 4 + c];
+        T_mat(r, c) = T_flat[(r * 4) + c];
       }
     }
     cam.T_cam_imu = Sophus::SE3d(T_mat);
@@ -110,7 +110,7 @@ class VIONode : public rclcpp::Node {
   // IMU callback — runs the EKF predict step
   // ----------------------------------------------------------------
   void imuCallback(const sensor_msgs::msg::Imu::ConstSharedPtr& msg) {
-    const double t = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+    const double t = msg->header.stamp.sec + (msg->header.stamp.nanosec * 1e-9);
 
     ImuData imu;
     imu.timestamp = t;
@@ -210,7 +210,7 @@ class VIONode : public rclcpp::Node {
     // Copy pose covariance (top-left 6×6 of 15×15 error-state cov)
     for (int r = 0; r < 6; ++r) {
       for (int c = 0; c < 6; ++c) {
-        odom.pose.covariance[r * 6 + c] = s.P(r, c);
+        odom.pose.covariance[(r * 6) + c] = s.P(r, c);
       }
     }
 

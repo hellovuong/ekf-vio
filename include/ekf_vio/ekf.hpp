@@ -80,8 +80,8 @@ class EKF {
   //   Phi  = I + F*dt  (first-order, sufficient at high IMU rates)
   //   Q_d  = G * Q_c * G^T * dt
   // -----------------------------------------------------------------------
-  void computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
-                 Eigen::Matrix<double, 15, 15>& F, Eigen::Matrix<double, 15, 12>& G) const;
+  void computeF(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                Eigen::Matrix<double, 15, 15>& F) const;
 
   // -----------------------------------------------------------------------
   // Project a 3-D point in camera frame to (left, right) pixel pairs
@@ -98,6 +98,11 @@ class EKF {
   State state_;
   StereoCamera cam_;
   NoiseParams noise_;
+
+  // G * Q_c * G^T is constant (rotation cancels out: R*R^T = I for every block).
+  // Precomputed once in the constructor so predict() skips building Q_c and G
+  // and the full matrix chain at 200 Hz.
+  Eigen::Matrix<double, 15, 15> gqgt_;
 
   // Landmark map: feature ID → world position + last-seen frame
   struct Landmark {

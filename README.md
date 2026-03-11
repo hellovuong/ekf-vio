@@ -27,6 +27,61 @@ evaluation tools for the [EuRoC MAV dataset](https://projects.asl.ethz.ch/datase
 
 ---
 
+## Benchmarks
+
+Measured on **EuRoC V1_01_easy** (2911 stereo frames, 29 120 IMU samples)
+running the standalone `euroc_runner` binary (`RelWithDebInfo`, single thread,
+no visualisation).
+
+### Runtime — per-stage breakdown
+
+| Stage | ms / frame | Share |
+|---|---|---|
+| Stereo rectification | 0.54 ms | 28 % |
+| Feature tracking (LK + RANSAC + triangulation) | 1.15 ms | 59 % |
+| EKF visual update (sequential Kalman) | 0.26 ms | 13 % |
+| **Total** | **1.96 ms** | — |
+| **Throughput** | **510 Hz** | — |
+
+### Accuracy — EuRoC V1_01_easy
+
+```
+====================================================
+  EKF-VIO Evaluation Report
+====================================================
+
+               Trajectory Statistics
+----------------------------------------------------
+  GT  trajectory length :    58.5617 m
+  Est trajectory length :    58.5617 m
+  Scale factor (Umeyama):   1.000000
+
+        ATE — Absolute Trajectory Error [m]
+----------------------------------------------------
+  RMSE   :   0.302531
+  Mean   :   0.272811
+  Median :   0.263252
+  Std    :   0.130763
+  Min    :   0.026047
+  Max    :   0.629476
+
+             RPE — Relative Pose Error
+----------------------------------------------------
+  Trans RMSE  :   0.040809 m
+  Trans Mean  :   0.035909 m
+  Trans Median:   0.034126 m
+  Rot   RMSE  :   0.173929 deg
+  Rot   Mean  :   0.132241 deg
+  Rot   Median:   0.127442 deg
+
+                       Drift
+----------------------------------------------------
+  ATE RMSE / GT length :     0.5166 %
+====================================================
+```
+
+---
+
 ## State Vector
 
 The filter maintains a **16-dimensional nominal state** and a

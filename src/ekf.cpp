@@ -15,7 +15,23 @@ namespace ekf_vio {
 using namespace math;
 
 // ---------------------------------------------------------------------------
-EKF::EKF(StereoCamera cam, const NoiseParams& noise) : cam_(std::move(cam)), noise_(noise) {}
+EKF::EKF(StereoCamera cam, const NoiseParams& noise) : cam_(std::move(cam)), noise_(noise) {
+  // G * Q_c * G^T is rotation-independent: every G block is ±I or ±R, and
+  // R*R^T = I, so the product reduces to a constant diagonal-block matrix.
+  //
+  //  State rows     G slice          Contribution
+  //  [3:6,  3:6]   -R * σ_a         σ_a² * R*R^T = σ_a² * I
+  //  [6:9,  6:9]   -I  * σ_g        σ_g² * I
+  //  [9:12, 9:12]   I  * σ_gb       σ_gb² * I
+  //  [12:15,12:15]  I  * σ_ab       σ_ab² * I
+  gqgt_.setZero();
+  gqgt_.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * (noise_.sigma_accel * noise_.sigma_accel);
+  gqgt_.block<3, 3>(6, 6) = Eigen::Matrix3d::Identity() * (noise_.sigma_gyro * noise_.sigma_gyro);
+  gqgt_.block<3, 3>(9, 9) =
+      Eigen::Matrix3d::Identity() * (noise_.sigma_gyro_bias * noise_.sigma_gyro_bias);
+  gqgt_.block<3, 3>(12, 12) =
+      Eigen::Matrix3d::Identity() * (noise_.sigma_accel_bias * noise_.sigma_accel_bias);
+}
 
 // ---------------------------------------------------------------------------
 // PREDICT step
@@ -26,29 +42,18 @@ void EKF::predict(const ImuData& imu, double dt) {
   const Eigen::Vector3d a_c = imu.accel - state_.b_a;
 
   // 2. Integrate state (RK4)
-  PVQ pvq{state_.T_wb.translation(), state_.v, state_.T_wb.so3()};
+  PVQ pvq{.p = state_.T_wb.translation(), .v = state_.v, .R = state_.T_wb.so3()};
   pvq = integrateRK4(pvq, omega_c, a_c, dt);
   state_.T_wb = Sophus::SE3d(pvq.R, pvq.p);
   state_.v = pvq.v;
 
-  // 3. Compute error-state Jacobian F (15×15) and noise matrix G (15×12)
+  // 3. Compute error-state Jacobian F (15×15)
   Eigen::Matrix<double, 15, 15> F;
-  Eigen::Matrix<double, 15, 12> G;
-  computeFG(omega_c, a_c, F, G);
+  computeF(omega_c, a_c, F);
 
-  // 4. Discretise  Phi ≈ I + F*dt,  Q_d = G * Q_c * G^T * dt
+  // 4. Discretise  Phi ≈ I + F*dt,  Q_d = gqgt_ * dt  (gqgt_ is constant, precomputed)
   const Eigen::Matrix<double, 15, 15> Phi = Eigen::Matrix<double, 15, 15>::Identity() + F * dt;
-
-  // Continuous noise spectral density diagonal
-  Eigen::Matrix<double, 12, 12> Q_c = Eigen::Matrix<double, 12, 12>::Zero();
-  Q_c.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * (noise_.sigma_gyro * noise_.sigma_gyro);
-  Q_c.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * (noise_.sigma_accel * noise_.sigma_accel);
-  Q_c.block<3, 3>(6, 6) =
-      Eigen::Matrix3d::Identity() * (noise_.sigma_gyro_bias * noise_.sigma_gyro_bias);
-  Q_c.block<3, 3>(9, 9) =
-      Eigen::Matrix3d::Identity() * (noise_.sigma_accel_bias * noise_.sigma_accel_bias);
-
-  const Eigen::Matrix<double, 15, 15> Q_d = G * Q_c * G.transpose() * dt;
+  const Eigen::Matrix<double, 15, 15> Q_d = gqgt_ * dt;
 
   // 5. Propagate covariance  P ← Phi P Phi^T + Q_d
   state_.P = Phi * state_.P * Phi.transpose() + Q_d;
@@ -71,17 +76,22 @@ void EKF::update(const std::vector<Feature>& features) {
   // World→camera: R_cw = R_ci * R_wb^T
   const Eigen::Matrix3d R_cw = R_ci * R_wb.transpose();
 
+  get_logger()->debug("[EKF upd] frame={} features_in={}  landmarks_map={}", frame_count_,
+                      features.size(), landmarks_.size());
+
   // ------------------------------------------------------------------
   // Separate features into new (initialise landmark) vs tracked (measure)
   // ------------------------------------------------------------------
   std::vector<int> meas_indices;  // indices into features[] for measurement
+  int n_new_landmarks = 0;
   for (int i = 0; i < static_cast<int>(features.size()); ++i) {
     const Feature& f = features[i];
     auto it = landmarks_.find(f.id);
     if (it == landmarks_.end()) {
       // New landmark: triangulate and store in world frame
       if (f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
-        landmarks_[f.id] = {camToWorld(f.p_c), frame_count_};
+        landmarks_[f.id] = {.p_w = camToWorld(f.p_c), .last_seen_frame = frame_count_};
+        ++n_new_landmarks;
       }
     } else {
       it->second.last_seen_frame = frame_count_;
@@ -90,6 +100,7 @@ void EKF::update(const std::vector<Feature>& features) {
   }
 
   const int M = static_cast<int>(meas_indices.size());
+  get_logger()->debug("[EKF upd]   new_landmarks={}  meas_candidates={}", n_new_landmarks, M);
   if (M == 0) return;
 
   // ------------------------------------------------------------------
@@ -101,6 +112,12 @@ void EKF::update(const std::vector<Feature>& features) {
 
   std::vector<Eigen::Vector4d> residuals;
   std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+  residuals.reserve(M);
+  jacobians.reserve(M);
+
+  int n_behind_camera = 0;
+  int n_pixel_gate_fail = 0;
+  int n_mahal_fail = 0;
 
   for (int k = 0; k < M; ++k) {
     const Feature& f = features[meas_indices[k]];
@@ -110,7 +127,10 @@ void EKF::update(const std::vector<Feature>& features) {
     const Eigen::Vector3d p_c_pred = worldToCam(p_w);
 
     // Skip landmarks behind the camera or too far
-    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) {
+      ++n_behind_camera;
+      continue;
+    }
 
     // Predicted stereo projection
     double eu_l = 0.0;
@@ -158,11 +178,27 @@ void EKF::update(const std::vector<Feature>& features) {
     H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;  // orientation
     H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;
 
+    // Pixel-space hard gate — independent of P size.
+    // When P is large the innovation covariance S = H P Hᵀ + R is also
+    // large, so the Mahalanobis distance of even a 100-px residual can
+    // normalise to near zero and pass the chi² threshold.  A per-component
+    // pixel cap catches bad measurements regardless of covariance state.
+    constexpr double kMaxResidualPx = 40.0;
+    if (res.cwiseAbs().maxCoeff() > kMaxResidualPx) {
+      ++n_pixel_gate_fail;
+      get_logger()->debug("[EKF upd]   pixel gate reject: res=[{:.1f},{:.1f},{:.1f},{:.1f}]",
+                          res(0), res(1), res(2), res(3));
+      continue;
+    }
+
     // Mahalanobis gating: reject outliers using innovation covariance
     const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
     const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
     const double mahal = res.transpose() * S_i.inverse() * res;
-    if (mahal > chi2_thresh) continue;
+    if (mahal > chi2_thresh) {
+      ++n_mahal_fail;
+      continue;
+    }
 
     residuals.push_back(res);
     jacobians.push_back(H_i);
@@ -188,50 +224,75 @@ void EKF::update(const std::vector<Feature>& features) {
     jacobians = std::move(j2);
   }
 
+  get_logger()->debug(
+      "[EKF upd]   gating: behind_cam={}  pixel_fail={}  mahal_fail={}  accepted={}",
+      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
+
   const auto N = static_cast<Eigen::Index>(residuals.size());
   if (N == 0) return;
 
-  // Assemble stacked z and H
-  Eigen::VectorXd z_all(4 * N);
-  Eigen::MatrixXd H_all(4 * N, 15);
-  H_all.setZero();
+  // ------------------------------------------------------------------
+  // Sequential Kalman update
+  //
+  // Batch update requires LDLT on a (4N × 4N) matrix — O((4N)^3) FLOP.
+  // At N=200 that is ~512M FLOP/frame and dominates runtime.
+  //
+  // Sequential update processes each 4-DOF feature measurement
+  // independently.  Each step only needs a 4×4 Cholesky, so the total
+  // cost is O(N × 15²) ≈ 2M FLOP.
+  //
+  // IMPORTANT — apply state correction immediately after each feature.
+  // Accumulating dx and applying it at the end is wrong: P shrinks after
+  // each step, so later features get a very small K even though their
+  // residuals (computed at the prior state) can still be large.  The
+  // result is that early features dominate the correction and later
+  // measurements are effectively ignored, causing divergence on
+  // sequences with aggressive motion.
+  // ------------------------------------------------------------------
+  const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
+
+  get_logger()->debug("[EKF upd]   sequential update: N={}  P_trace_prior={:.4e}", N,
+                      state_.P.trace());
+
+  // Accumulate total correction for post-update diagnostics only
+  Eigen::Matrix<double, 15, 1> dx_total = Eigen::Matrix<double, 15, 1>::Zero();
+
   for (Eigen::Index k = 0; k < N; ++k) {
-    z_all.segment<4>(4 * k) = residuals[k];
-    H_all.block<4, 15>(4 * k, 0) = jacobians[k];
+    const Eigen::Matrix<double, 4, 15>& H_k = jacobians[k];
+
+    // Innovation covariance (4×4) — Cholesky is stable and trivially cheap
+    const Eigen::Matrix4d S_k = H_k * state_.P * H_k.transpose() + R_i;
+    const Eigen::LLT<Eigen::Matrix4d> S_llt(S_k);
+    if (S_llt.info() != Eigen::Success) continue;
+
+    // Kalman gain (15×4)
+    const Eigen::Matrix<double, 15, 4> K_k =
+        state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix4d::Identity());
+
+    // State correction for this feature — apply immediately so that P and
+    // state remain consistent when the next feature is processed
+    const Eigen::Matrix<double, 15, 1> dx_k = K_k * residuals[k];
+    if (!dx_k.allFinite()) continue;
+
+    dx_total += dx_k;
+
+    state_.T_wb.translation() += dx_k.segment<3>(0);
+    state_.v += dx_k.segment<3>(3);
+    state_.T_wb.so3() *= Sophus::SO3d::exp(dx_k.segment<3>(6));
+    state_.b_g += dx_k.segment<3>(9);
+    state_.b_a += dx_k.segment<3>(12);
+
+    // Covariance update — Joseph form for numerical stability
+    const Eigen::Matrix<double, 15, 15> IKH = Eigen::Matrix<double, 15, 15>::Identity() - K_k * H_k;
+    state_.P = IKH * state_.P * IKH.transpose() + K_k * R_i * K_k.transpose();
+    state_.P = 0.5 * (state_.P + state_.P.transpose());
   }
 
-  // ------------------------------------------------------------------
-  // Kalman update (LDLT for numerical stability)
-  // ------------------------------------------------------------------
-  const Eigen::MatrixXd R_mat = Eigen::MatrixXd::Identity(4 * N, 4 * N) * sig2;
-
-  const Eigen::MatrixXd S = H_all * state_.P * H_all.transpose() + R_mat;
-  // Solve K = P * H^T * S^{-1}  via  S^T * K^T = H * P^T  →  K^T = S^{-T} * H * P
-  const Eigen::LDLT<Eigen::MatrixXd> S_ldlt(S);
-  if (S_ldlt.info() != Eigen::Success) {
-    get_logger()->warn("EKF visual update: LDLT decomposition failed");
-    return;
-  }
-  const Eigen::MatrixXd K =
-      state_.P * H_all.transpose() * S_ldlt.solve(Eigen::MatrixXd::Identity(4 * N, 4 * N));
-  const Eigen::VectorXd dx = K * z_all;
-
-  // NaN check on dx
-  if (!dx.allFinite()) {
-    get_logger()->warn("EKF visual update: dx contains NaN — skipping");
-    return;
-  }
-
-  state_.T_wb.translation() += dx.segment<3>(0);
-  state_.v += dx.segment<3>(3);
-  state_.T_wb.so3() *= Sophus::SO3d::exp(dx.segment<3>(6));
-  state_.b_g += dx.segment<3>(9);
-  state_.b_a += dx.segment<3>(12);
-
-  // Joseph form
-  const Eigen::Matrix<double, 15, 15> IKH = Eigen::Matrix<double, 15, 15>::Identity() - K * H_all;
-  state_.P = IKH * state_.P * IKH.transpose() + K * R_mat * K.transpose();
-  state_.P = 0.5 * (state_.P + state_.P.transpose());
+  get_logger()->debug(
+      "[EKF upd]   P_trace_post={:.4e}  dx: pos={:.4f}m  vel={:.4f}m/s  rot={:.4f}rad"
+      "  bg={:.2e}  ba={:.2e}",
+      state_.P.trace(), dx_total.segment<3>(0).norm(), dx_total.segment<3>(3).norm(),
+      dx_total.segment<3>(6).norm(), dx_total.segment<3>(9).norm(), dx_total.segment<3>(12).norm());
 
   // Enforce minimum positive-definite covariance
   if (!state_.P.allFinite()) {
@@ -371,10 +432,9 @@ EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
 //  θ̇  =  ω_c             →  ∂θ̇/∂δθ = -[ω_c]×,   ∂θ̇/∂δb_g = -I
 //  ḃ_g = 0,  ḃ_a = 0
 // ---------------------------------------------------------------------------
-void EKF::computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
-                    Eigen::Matrix<double, 15, 15>& F, Eigen::Matrix<double, 15, 12>& G) const {
+void EKF::computeF(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
+                   Eigen::Matrix<double, 15, 15>& F) const {
   F.setZero();
-  G.setZero();
 
   const Eigen::Matrix3d R = state_.T_wb.rotationMatrix();
 
@@ -386,13 +446,6 @@ void EKF::computeFG(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c,
   // θ̇ = ω_c
   F.block<3, 3>(6, 6) = -skew(omega_c);                // ∂/∂δθ
   F.block<3, 3>(6, 9) = -Eigen::Matrix3d::Identity();  // ∂/∂δb_g
-
-  // Noise input matrix G (maps 12-dim noise → 15-dim error state)
-  //  n = [n_g, n_a, n_bg, n_ba]
-  G.block<3, 3>(3, 3) = -R;                            // accel noise → velocity
-  G.block<3, 3>(6, 0) = -Eigen::Matrix3d::Identity();  // gyro noise → angle
-  G.block<3, 3>(9, 6) = Eigen::Matrix3d::Identity();   // gyro bias noise
-  G.block<3, 3>(12, 9) = Eigen::Matrix3d::Identity();  // accel bias noise
 }
 
 // ---------------------------------------------------------------------------
