@@ -34,11 +34,6 @@ endif()
 option(WITH_RERUN "Build with Rerun visualization by rerun" OFF)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# VISUALIZATION OPTION WITH RERUN
-# ──────────────────────────────────────────────────────────────────────────────
-option(WITH_RERUN "Build with Rerun visualization by rerun" OFF)
-
-# ──────────────────────────────────────────────────────────────────────────────
 # Dependencies
 # ──────────────────────────────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
@@ -147,11 +142,6 @@ install(TARGETS ekf_vio_core vio_node euroc_runner euroc_vo_runner
 )
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
-
-if(WITH_RERUN)
-  install(TARGETS euroc_rerun_runner
-    RUNTIME DESTINATION lib/${PROJECT_NAME})
-endif(WITH_RERUN)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Tests
