@@ -21,6 +21,7 @@
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <pthread.h>
 #include <string>
 
 #ifdef EKF_VIO_WITH_RERUN
@@ -50,6 +51,7 @@ struct RerunLogData {
 using namespace ekf_vio;
 
 int main(int argc, char** argv) {
+  pthread_setname_np(pthread_self(), "vio_main");
   init_logging(spdlog::level::info);
   auto log = get_logger();
 
@@ -174,6 +176,7 @@ int main(int argc, char** argv) {
   std::thread log_thread;
   if (want_rerun) {
     log_thread = std::thread([&]() {
+      pthread_setname_np(pthread_self(), "rerun_log");
       std::vector<rerun::Vec3D> est_traj;
 
       while (true) {

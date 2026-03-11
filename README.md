@@ -3,7 +3,13 @@
 [![CI](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml/badge.svg)](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/hellovuong/ekf-vio/graph/badge.svg?token=D3YZ4MI6M4)](https://codecov.io/github/hellovuong/ekf-vio)
 
-A tightly-coupled **EKF-VIO** system for a **stereo camera + 6-DOF IMU** rig,
+## Demo
+
+[![EuRoC V1_01_easy camera 2D/3D features overlaid via [Rerun](https://rerun.io).](https://img.youtube.com/vi/pMtEjQT37do/maxresdefault.jpg)](https://youtu.be/pMtEjQT37do)
+
+---
+
+A filter-based **EKF-VIO** system for a **stereo camera + 6-DOF IMU** rig,
 written in modern C++20 with Eigen, Sophus, spdlog, and ROS 2.
 
 Includes a standalone **keyframe-based stereo VO** pipeline and offline
@@ -236,9 +242,11 @@ ekf-vio/
 │   └── vio.launch.py          # ROS 2 launch file
 ├── scripts/
 │   ├── evaluate_euroc.py      # ATE/RPE evaluation + plotting
-│   └── compare_vo_vio.py      # Compare VO vs VIO trajectories
-├── learning/
-│   └── ba.cpp                 # Educational: two-view RGBD bundle adjustment
+│   ├── compare_vo_vio.py      # Compare VO vs VIO trajectories
+│   └── vio_observer.py        # Live CPU/RSS monitor for a running VIO process
+├── docs/
+│   ├── results/               # RPE/ATE plots and trajectory CSVs
+│   └──
 ├── Dockerfile                 # Multi-stage: deps → build → test → dev
 ├── CMakeLists.txt
 ├── package.xml
@@ -257,6 +265,7 @@ ekf-vio/
 | spdlog | — | Structured logging (info, debug, warn) |
 | yaml-cpp | — | Configuration file parsing |
 | ROS 2 Jazzy | — | `rclcpp`, `sensor_msgs`, `cv_bridge`, `tf2_ros`, etc. |
+| Rerun C++ SDK | 0.19.0 (optional) | Live trajectory + feature visualization (`-DWITH_RERUN=ON`, fetched automatically via CMake FetchContent) |
 
 ---
 
@@ -283,6 +292,10 @@ sudo cmake --build /tmp/sophus/build --target install
 cd ~/ros2_ws
 colcon build --packages-select ekf_vio --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
+
+# Optional: build with Rerun visualization support (downloads SDK automatically)
+colcon build --packages-select ekf_vio \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DWITH_RERUN=ON
 ```
 
 ### Docker
@@ -302,7 +315,7 @@ docker build --target test -t ekf-vio-test .
 
 ## Running
 
-### ROS 2 Node
+### ROS 2 Node (Have not tested)
 
 ```bash
 # Terminal 1 — launch VIO
@@ -316,7 +329,7 @@ rviz2
 # Add: TF, Odometry (/vio/odometry), Image (/camera/left/image_raw)
 ```
 
-### Standalone EuRoC Runner
+### Standalone EuRoC Runner (Tested with V1_01_easy)
 
 ```bash
 # EKF-VIO (IMU + stereo)
@@ -327,6 +340,31 @@ rviz2
 ```
 
 Both runners output `euroc_traj.csv` for evaluation.
+
+### Rerun Visualization (requires `-DWITH_RERUN=ON`)
+
+```bash
+# Stream live to Rerun desktop app (Linux, same machine)
+./install/lib/ekf_vio/euroc_runner /path/to/V1_01_easy config/euroc.yaml \
+  --connect 127.0.0.1:9876
+
+# Save to file for replay anywhere (cross-platform)
+./install/lib/ekf_vio/euroc_runner /path/to/V1_01_easy config/euroc.yaml \
+  --save-rerun-file ekf_vio.rrd
+```
+
+Logged channels: GT trajectory (green), EKF trajectory (red), body position (blue), left camera image, 2D feature tracks, 3D landmarks in world frame.
+
+### Process Monitor
+
+```bash
+# Auto-detect any running VIO process and print live CPU / RSS
+python3 scripts/vio_observer.py
+
+# Target a specific binary or PID
+python3 scripts/vio_observer.py --name vio_main
+python3 scripts/vio_observer.py --pid 12345 --interval 0.5
+```
 
 ### Evaluation
 

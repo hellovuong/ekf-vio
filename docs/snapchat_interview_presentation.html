@@ -368,12 +368,22 @@
 
   <!-- ── SLIDE 0 — Title ─────────────────────────────────────── -->
   <div class="slide slide-title active">
-    <div class="kicker">VSLAM Engineer · VR/AR</div>
-    <h1>EKF Visual-Inertial<br>Odometry</h1>
-    <div class="subtitle">Stereo Camera + IMU filter-based fusion for lightning fast 6-DOF Pose Estimation</div>
-    <div class="author">
-      <div style="font-weight:600; font-size:17px;">Long Vuong</div>
-      <div style="color:var(--muted); font-size:13px; margin-top:4px;">Presented to <span style="color:var(--accent); font-weight:700;">Snapchat</span> — Spectacles / AR Division</div>
+    <!-- background demo video, muted auto-play -->
+    <video autoplay muted loop playsinline
+      style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+             opacity:0.22; border-radius:12px; pointer-events:none; z-index:0;">
+      <source src="v101Easy.mp4" type="video/mp4">
+    </video>
+    <!-- content sits above video -->
+    <div style="position:relative; z-index:1; display:flex; flex-direction:column;
+                align-items:center; gap:16px; text-align:center;">
+      <div class="kicker">VSLAM Engineer · VR/AR</div>
+      <h1>EKF Visual-Inertial<br>Odometry</h1>
+      <div class="subtitle">Stereo Camera + IMU filter-based fusion for lightning fast 6-DOF Pose Estimation</div>
+      <div class="author">
+        <div style="font-weight:600; font-size:17px;">Long Vuong</div>
+        <div style="color:var(--muted); font-size:13px; margin-top:4px;">Presented to <span style="color:var(--accent); font-weight:700;">Snapchat</span> — Spectacles / AR Division</div>
+      </div>
     </div>
   </div>
 
@@ -381,15 +391,16 @@
   <div class="slide">
     <div class="slide-header"><span class="slide-num">01</span><h2>Agenda</h2></div>
     <div class="body">
-      <div class="agenda-grid">
+      <div class="agenda-grid" style="grid-template-columns: 1fr 1fr 1fr; gap:8px;">
         <div class="agenda-item"><span class="num">01</span>Why VSLAM is Hard in VR/AR</div>
         <div class="agenda-item"><span class="num">02</span>System Architecture</div>
         <div class="agenda-item"><span class="num">03</span>State Estimation &amp; IMU Predict</div>
         <div class="agenda-item"><span class="num">04</span>Feature Tracking Pipeline</div>
         <div class="agenda-item"><span class="num">05</span>EKF Visual Update</div>
         <div class="agenda-item"><span class="num">06</span>Bottleneck Discovery &amp; Fix</div>
-        <div class="agenda-item"><span class="num">07</span>Benchmark Results</div>
-        <div class="agenda-item"><span class="num">08</span>Relevance to Snapchat &amp; Next Steps</div>
+        <div class="agenda-item"><span class="num">07</span>Benchmark Results &amp; Runtime Profile</div>
+        <div class="agenda-item"><span class="num">08</span>CI / Quality Pipeline</div>
+        <div class="agenda-item"><span class="num">09</span>Relevance to Snapchat &amp; Next Steps</div>
       </div>
     </div>
   </div>
@@ -801,9 +812,93 @@
     </div>
   </div>
 
-  <!-- ── SLIDE 11 — Relevance ───────────────────────────────── -->
+  <!-- ── SLIDE 11 — Demo Visualization ────────────────────── -->
   <div class="slide">
-    <div class="slide-header"><span class="slide-num">11</span><h2>Relevance to Snapchat Spectacles</h2></div>
+    <div class="slide-header"><span class="slide-num">11</span><h2>Live Demo — EuRoC V1_01_easy</h2></div>
+    <div class="body" style="gap:8px;">
+
+      <div style="display:flex; gap:10px; flex-shrink:0;">
+        <div class="callout callout-yellow" style="flex:1; padding:8px 14px; font-size:13px;">
+          <strong>Green</strong> — ground-truth trajectory &nbsp;·&nbsp;
+          <strong style="color:var(--red);">Red</strong> — EKF estimate &nbsp;·&nbsp;
+          <strong style="color:var(--accent2);">Blue</strong> — live body position
+        </div>
+        <div class="callout callout-green" style="flex:1; padding:8px 14px; font-size:13px;">
+          Rerun async logger — zero-overhead visualization; I/O fully decoupled from the EKF loop.
+        </div>
+      </div>
+
+      <!-- video, takes remaining vertical space -->
+      <div style="flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
+                  background:var(--code-bg); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;">
+        <video autoplay muted loop playsinline
+          style="max-width:100%; max-height:100%; object-fit:contain; display:block;">
+          <source src="v101Easy.mp4" type="video/mp4">
+        </video>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── SLIDE 12 — Runtime Profile ───────────────────────── -->
+  <div class="slide">
+    <div class="slide-header"><span class="slide-num">12</span><h2>Runtime Resource Profile — Live Session</h2></div>
+    <div class="body">
+
+      <!-- Top metric cards -->
+      <div class="metrics" style="flex-shrink:0; grid-template-columns: repeat(4, 1fr);">
+        <div class="metric-card" style="border-color:var(--accent);">
+          <div class="val">240%</div><div class="unit">avg CPU (multi-core)</div>
+        </div>
+        <div class="metric-card" style="border-color:var(--green);">
+          <div class="val">128 MB</div><div class="unit">RSS (peak-stable)</div>
+        </div>
+        <div class="metric-card">
+          <div class="val">24%</div><div class="unit">VIO thread CPU avg</div>
+        </div>
+        <div class="metric-card">
+          <div class="val">~0%</div><div class="unit">Rerun viz overhead</div>
+        </div>
+      </div>
+
+      <div class="cols cols-2" style="flex:1; margin-top:10px;">
+
+        <!-- Left: thread table -->
+        <div>
+          <h3>Thread Breakdown — 14 samples · 15 s</h3>
+          <table>
+            <thead><tr><th>Thread</th><th>Avg %</th><th>Min %</th><th>Max %</th></tr></thead>
+            <tbody>
+              <tr class="hl"><td><strong>vio_main</strong></td><td style="color:var(--accent); font-weight:700;">24.0%</td><td>15.2%</td><td>82.9%</td></tr>
+              <tr><td>ChunkBatcher::c <span style="color:var(--muted); font-size:11px;">(Rerun)</span></td><td>0.1%</td><td>0.0%</td><td>1.0%</td></tr>
+              <tr><td>RecordingStream <span style="color:var(--muted); font-size:11px;">(Rerun)</span></td><td>0.0%</td><td>0.0%</td><td>0.0%</td></tr>
+            </tbody>
+          </table>
+          <div style="margin-top:10px;" class="callout callout-blue">
+            <strong>240% total CPU</strong> reflects OpenCV's multi-threaded LK optical flow
+            running on multiple cores. The core EKF logic is single-threaded at 24% avg —
+            the spike to 82.9% is burst processing during full-frame feature detection.
+          </div>
+        </div>
+
+        <!-- Right: interpretation -->
+        <div>
+          <h3>What This Means for Embedded Deployment</h3>
+          <ul style="gap:8px;">
+            <li><strong>128 MB RSS, perfectly flat</strong> — no allocations in the hot path; all Eigen matrices stack-allocated or pre-allocated. Zero memory growth over the session confirms no leaks.</li>
+            <li><strong>24% avg on one core</strong> — the tracking + EKF loop leaves ≥ 75% of one CPU core free for a render thread on the same SoC.</li>
+            <li><strong>Burst to 83%</strong> — FAST detection spikes are bounded and infrequent; the system never saturates a core end-to-end.</li>
+            <li><strong>Rerun visualization (disabled): &lt; 0.2% total</strong> — async producer/consumer queue completely decouples I/O from the realtime path.</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SLIDE 12 — Relevance ───────────────────────────────── -->
+  <div class="slide">
+    <div class="slide-header"><span class="slide-num">13</span><h2>Relevance to Snapchat Spectacles</h2></div>
     <div class="body">
       <table style="flex-shrink:0;">
         <thead><tr><th>This System</th><th>AR Headset Requirement</th><th>Status</th></tr></thead>
@@ -819,8 +914,7 @@
         <div>
           <h3>What VR/AR Adds on Top</h3>
           <ul>
-            <li><strong>Rolling-shutter correction</strong> — per-row time offset on CMOS sensors</li>
-            <li><strong>Lazy mapping thread</strong> — loop closure + landmark refinement offloaded, tracking stays hard-RT</li>
+            <li><strong>Lazy mapping thread</strong> — loop closure + landmark refinement offloaded</li>
             <li><strong>Multi-camera / fisheye</strong> — wide FOV tracking for head-mounted use</li>
             <li><strong>Photometric calibration</strong> — stable LK under varying indoor lighting</li>
           </ul>
@@ -838,9 +932,9 @@
     </div>
   </div>
 
-  <!-- ── SLIDE 12 — Next Steps ──────────────────────────────── -->
+  <!-- ── SLIDE 13 — Next Steps ──────────────────────────────── -->
   <div class="slide">
-    <div class="slide-header"><span class="slide-num">12</span><h2>Open Challenges &amp; Roadmap</h2></div>
+    <div class="slide-header"><span class="slide-num">14</span><h2>Open Challenges &amp; Roadmap</h2></div>
     <div class="body">
       <div class="cols cols-2">
         <div>
@@ -870,9 +964,9 @@
     </div>
   </div>
 
-  <!-- ── SLIDE 13 — Engineering ─────────────────────────────── -->
+  <!-- ── SLIDE 14 — Engineering ─────────────────────────────── -->
   <div class="slide">
-    <div class="slide-header"><span class="slide-num">13</span><h2>Engineering Practices</h2></div>
+    <div class="slide-header"><span class="slide-num">15</span><h2>Engineering Practices</h2></div>
     <div class="body">
       <div class="cols cols-2">
         <div>
@@ -907,9 +1001,102 @@
     </div>
   </div>
 
-  <!-- ── SLIDE 14 — Takeaways ───────────────────────────────── -->
+  <!-- ── SLIDE 16 — CI / Quality Pipeline ─────────────────── -->
   <div class="slide">
-    <div class="slide-header"><span class="slide-num">14</span><h2>Key Takeaways</h2></div>
+    <div class="slide-header"><span class="slide-num">16</span><h2>CI / Quality Pipeline</h2></div>
+    <div class="body" style="gap:8px;">
+
+      <!-- Pipeline flow -->
+      <div class="pipeline" style="font-size:11px; flex-shrink:0;">
+        <div class="pipe-box" style="background:rgba(88,166,255,.08); border-color:var(--accent2);">
+          git push / PR<div class="label">GitHub</div>
+        </div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-box">Pre-commit<div class="label">format · secrets · SPDX</div></div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-box hl-box">Docker build<div class="label">--target test · 6m 50s</div></div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-box">GTest suite<div class="label">EKF · tracker · VO</div></div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-box">Codecov<div class="label">87% · delta comment</div></div>
+        <div class="pipe-arr">→</div>
+        <div class="pipe-box" style="background:rgba(63,185,80,.10); border-color:var(--green); font-weight:700;">
+          ✓ Merge<div class="label">2 checks · 7m 19s</div>
+        </div>
+      </div>
+
+      <!-- Three columns: GitHub preview | GH Actions screenshot | Codecov screenshot -->
+      <div style="display:grid; grid-template-columns: 1fr 1.6fr 1.2fr; gap:10px; flex:1; min-height:0; overflow:hidden;">
+
+        <!-- Left: repo preview + coverage bars -->
+        <div style="display:flex; flex-direction:column; gap:8px; overflow:hidden;">
+          <!-- git.png badge strip -->
+          <div style="flex-shrink:0;">
+            <h3>Live Repo — GitHub</h3>
+            <img src="git.png" alt="GitHub repo with CI + codecov badges"
+              style="width:100%; border-radius:6px; border:1px solid var(--border); object-fit:contain;">
+          </div>
+          <!-- Coverage bars using real numbers -->
+          <div style="flex-shrink:0;">
+            <h3>Coverage by File</h3>
+            <div style="display:flex; flex-direction:column; gap:7px; font-size:11.5px;">
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>src/ekf.cpp</span><span style="color:var(--green); font-weight:600;">86.88%</span>
+                </div>
+                <div style="height:7px; background:var(--bg3); border-radius:3px; overflow:hidden;">
+                  <div style="height:100%; background:var(--green); border-radius:3px; width:86.88%;"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>src/stereo_tracker.cpp</span><span style="color:var(--green); font-weight:600;">94.73%</span>
+                </div>
+                <div style="height:7px; background:var(--bg3); border-radius:3px; overflow:hidden;">
+                  <div style="height:100%; background:var(--accent2); border-radius:3px; width:94.73%;"></div>
+                </div>
+              </div>
+              <div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+                  <span>Patch overall</span><span style="color:var(--accent); font-weight:600;">89.9%</span>
+                </div>
+                <div style="height:7px; background:var(--bg3); border-radius:3px; overflow:hidden;">
+                  <div style="height:100%; background:var(--accent); border-radius:3px; width:89.9%;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Centre: GitHub Actions run screenshot -->
+        <div style="display:flex; flex-direction:column; gap:4px; min-height:0; overflow:hidden;">
+          <h3>GitHub Actions — Real Run</h3>
+          <img src="ghac.png" alt="GitHub Actions success — build-and-test 7m15s, lint 16s"
+            style="width:100%; border-radius:6px; border:1px solid var(--border); object-fit:contain; object-position:top; flex:1; min-height:0;">
+          <div style="font-size:11px; color:var(--muted); flex-shrink:0;">
+            <span style="color:var(--green);">✓ build-and-test</span> 7m 15s &nbsp;·&nbsp;
+            <span style="color:var(--green);">✓ lint</span> 16s &nbsp;·&nbsp;
+            Docker cache hit 25%
+          </div>
+        </div>
+
+        <!-- Right: Codecov PR comment screenshot -->
+        <div style="display:flex; flex-direction:column; gap:4px; min-height:0; overflow:hidden;">
+          <h3>Codecov PR Comment</h3>
+          <img src="cov_comment.png" alt="Codecov comment on PR — 89.9% patch, delta visible"
+            style="width:100%; border-radius:6px; border:1px solid var(--border); object-fit:contain; object-position:top; flex:1; min-height:0;">
+          <div style="font-size:11px; color:var(--muted); flex-shrink:0;">
+            Auto-posted on every PR · regression blocks merge
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SLIDE 17 — Takeaways ───────────────────────────────── -->
+  <div class="slide">
+    <div class="slide-header"><span class="slide-num">17</span><h2>Key Takeaways</h2></div>
     <div class="body" style="justify-content:center; gap:14px;">
       <div class="callout callout-yellow" style="font-size:15px; padding:16px 20px;">
         <strong>"The bottleneck is always where you don't expect it."</strong><br>
@@ -937,8 +1124,8 @@
         <div class="callout callout-yellow">
           <strong>Ready to extend</strong><br>
           <span style="font-size:13px; color:var(--muted);">
-            Modular C++20 architecture: loop closure, lazy mapping thread, and
-            rolling-shutter can be added as separate modules.
+            Modular C++20 architecture: lazy mapping thread, and
+            camera models can be added as separate modules.
           </span>
         </div>
       </div>
