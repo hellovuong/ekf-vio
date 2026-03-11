@@ -370,7 +370,7 @@
   <div class="slide slide-title active">
     <div class="kicker">VSLAM Engineer · VR/AR</div>
     <h1>EKF Visual-Inertial<br>Odometry</h1>
-    <div class="subtitle">Stereo Camera + IMU Tight Coupling for Real-Time 6-DOF Pose Estimation</div>
+    <div class="subtitle">Stereo Camera + IMU filter-based fusion for lightning fast 6-DOF Pose Estimation</div>
     <div class="author">
       <div style="font-weight:600; font-size:17px;">Long Vuong</div>
       <div style="color:var(--muted); font-size:13px; margin-top:4px;">Presented to <span style="color:var(--accent); font-weight:700;">Snapchat</span> — Spectacles / AR Division</div>
@@ -424,44 +424,64 @@
   <!-- ── SLIDE 3 — Architecture ─────────────────────────────── -->
   <div class="slide">
     <div class="slide-header"><span class="slide-num">03</span><h2>System Architecture</h2></div>
-    <div class="body">
-      <div class="pipeline">
-        <div class="pipe-box">IMU<div class="label">~200 Hz</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">EKF Predict<div class="label">RK4 integration</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">State T_wb, v, b</div>
-      </div>
-      <div style="height:8px;"></div>
-      <div class="pipeline">
-        <div class="pipe-box">Stereo Cams<div class="label">~20–30 Hz</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">Rectifier<div class="label">OpenCV remap</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">Tracker<div class="label">FAST + LK + RANSAC</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box">3D Features<div class="label">p_c per feature</div></div>
-        <div class="pipe-arr">→</div>
-        <div class="pipe-box hl-box">EKF Update<div class="label">Sequential Kalman</div></div>
-      </div>
-      <div style="height:6px;"></div>
-      <div class="cols cols-3" style="flex:1;">
-        <div class="callout callout-blue">
-          <strong>Tight coupling</strong><br>
-          Visual measurements constrain the EKF state directly — no intermediate pose estimate.
-          Residuals are reprojection errors, not relative poses.
+    <div class="body" style="justify-content:center; gap:0;">
+
+      <!--
+           IMU (200 Hz) ──→ Propagate ──────────────────────────┐
+                                                                ▼ ← shared EKF State (right column)
+           Stereo (30 Hz) ──→ Track → Triangulate → Update ────┘
+      -->
+      <div style="display:flex; align-items:stretch; gap:0; width:100%;">
+
+        <!-- Left lanes (stacked) -->
+        <div style="display:flex; flex-direction:column; gap:0; flex:1;">
+
+          <!-- IMU lane -->
+          <div style="display:flex; align-items:center; gap:0; padding-bottom:6px; border-bottom:2px solid var(--border); border-right:2px solid var(--border); border-radius:0 0 12px 0; padding-right:0;">
+            <div style="font-size:10px; color:var(--muted); white-space:nowrap; padding-right:8px;">200 Hz</div>
+            <div class="pipe-box">IMU<div class="label">ω, a</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box hl-box">Propagate<div class="label">RK4 kinematics</div></div>
+            <div class="pipe-arr" style="margin-left:auto; color:var(--border);">─</div>
+          </div>
+
+          <!-- gap between lanes -->
+          <div style="height:14px; border-right:2px solid var(--border);"></div>
+
+          <!-- Camera lane -->
+          <div style="display:flex; align-items:center; gap:0; padding-top:6px; border-top:2px solid var(--border); border-right:2px solid var(--border); border-radius:0 12px 0 0; padding-right:0;">
+            <div style="font-size:10px; color:var(--muted); white-space:nowrap; padding-right:8px;">20–30 Hz</div>
+            <div class="pipe-box">Stereo<div class="label">L + R</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box">Track<div class="label">FAST · LK · RANSAC</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box">Triangulate<div class="label">Z = f·b/d</div></div>
+            <div class="pipe-arr">→</div>
+            <div class="pipe-box hl-box">EKF Update<div class="label">Sequential Kalman</div></div>
+            <div class="pipe-arr" style="margin-left:auto; color:var(--border);">─</div>
+          </div>
+
         </div>
-        <div class="callout callout-yellow">
-          <strong>IMU role</strong><br>
-          Predicts pose between camera frames at 200 Hz. Absorbs fast rotations.
-          Provides absolute scale via gravity.
+
+        <!-- Right column: shared EKF State, vertically centered -->
+        <div style="display:flex; align-items:center; padding-left:0; flex-shrink:0;">
+          <div style="font-size:22px; color:var(--green); line-height:1; margin-right:-2px;">→</div>
+          <div class="pipe-box" style="border-color:var(--green); background:rgba(63,185,80,.10); padding:18px 14px; font-weight:700; font-size:13px; white-space:nowrap;">
+            EKF State
+            <div class="label" style="margin-top:5px;">T_wb · v · b_g · b_a</div>
+            <div class="label" style="font-size:9.5px; margin-top:2px;">P : 15 × 15</div>
+          </div>
         </div>
-        <div class="callout callout-green">
-          <strong>Stereo role</strong><br>
-          Provides metric depth without ambiguity. Corrects IMU drift.
-          Baseline ~11 cm on EuRoC rig.
-        </div>
+
       </div>
+
+      <!-- Three short tags -->
+      <div style="display:flex; gap:10px; margin-top:22px;">
+        <div class="callout callout-yellow" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>IMU</strong> — 200 Hz predict · absorbs head-shake · scale via gravity</div>
+        <div class="callout callout-blue" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>Pixel-level fusion</strong> — reprojection residuals correct pose/vel/bias · landmarks fixed from stereo (not in state)</div>
+        <div class="callout callout-green" style="flex:1; padding:8px 12px; font-size:12.5px;"><strong>Stereo</strong> — unambiguous metric depth · corrects IMU drift</div>
+      </div>
+
     </div>
   </div>
 
