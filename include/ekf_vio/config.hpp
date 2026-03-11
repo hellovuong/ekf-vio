@@ -10,6 +10,7 @@
 #pragma once
 
 #include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 #include "ekf_vio/stereo_tracker.hpp"
 #include "ekf_vio/stereo_vo.hpp"
 
@@ -216,4 +217,14 @@ inline EKF::NoiseParams toNoiseParams(const ImuConfig& imu, const EkfConfig& ekf
   return n;
 }
 
+inline EKFRk4::NoiseParams toNoiseParamsRK4(const ImuConfig& imu, const EkfConfig& ekf) {
+  EKFRk4::NoiseParams n;
+  n.sigma_gyro = imu.noise_gyro;
+  n.sigma_accel = imu.noise_accel;
+  n.sigma_gyro_bias = imu.gyro_walk;
+  n.sigma_accel_bias = imu.accel_walk;
+  n.sigma_pixel = ekf.sigma_pixel;
+  n.landmark_max_age = ekf.landmark_max_age;
+  return n;
+}
 }  // namespace ekf_vio
