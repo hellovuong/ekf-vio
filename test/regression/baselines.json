@@ -1,0 +1,20 @@
+{
+  "_comment": "RPE regression baselines. tol = allowed degradation above baseline before CI fails.",
+  "_note": "rpe_trans_rmse_m and rpe_rot_rmse_deg are at --rpe-delta 10 frames. Run --update-baseline after intentional improvement.",
+  "sequences": {
+    "V1_01_easy": {
+      "rpe_trans_rmse_m":  0.08,
+      "rpe_trans_tol_m":   0.02,
+      "rpe_rot_rmse_deg":  2.5,
+      "rpe_rot_tol_deg":   1.0,
+      "min_poses":   1500
+    },
+    "V1_02_medium": {
+      "rpe_trans_rmse_m":  0.15,
+      "rpe_trans_tol_m":   0.05,
+      "rpe_rot_rmse_deg":  5.0,
+      "rpe_rot_tol_deg":   2.0,
+      "min_poses":   1500
+    }
+  }
+}

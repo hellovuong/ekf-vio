@@ -1,0 +1,121 @@
+name: Regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"   # every Monday 03:00 UTC — catch noise-driven drift
+  workflow_dispatch:
+    inputs:
+      sequence:
+        description: "Sequence to test (leave blank to run all matrix sequences)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - V1_01_easy
+          - V1_02_medium
+      update_baseline:
+        description: "Update baseline after a passing run"
+        required: false
+        default: false
+        type: boolean
+
+# Cancel any in-progress regression run on the same branch when a new commit arrives
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # When triggered manually with a specific sequence, only that one runs.
+        # Otherwise the full default set is used.
+        sequence: ${{ (github.event_name == 'workflow_dispatch' && inputs.sequence != '') && fromJson(format('["{0}"]', inputs.sequence)) || fromJson('["V1_01_easy","V1_02_medium"]') }}
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Cache test data ─────────────────────────────────────────────────
+      # Key includes the sequence name so each sequence has its own cache slot.
+      # The cache is keyed on a fixed label (v1) — bump to v2 to force re-download.
+      - name: Cache EuRoC test data
+        id: cache-data
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ekf-vio-data/${{ matrix.sequence }}
+          key: euroc-testdata-v1-${{ matrix.sequence }}
+
+      # ── Download data (cache miss only) ─────────────────────────────────
+      - name: Download test sequence
+        if: steps.cache-data.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y --no-install-recommends wget zstd
+          bash scripts/download_testdata.sh ${{ matrix.sequence }}
+
+      # ── Build via Docker (reuses layer cache from ci.yml) ───────────────
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build euroc_runner image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: release
+          load: true
+          tags: ekf-vio:regression
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Run EKF-VIO on the sequence ─────────────────────────────────────
+      - name: Run euroc_runner
+        run: |
+          mkdir -p results/${{ matrix.sequence }}
+          docker run --rm \
+            -v ~/.cache/ekf-vio-data/${{ matrix.sequence }}:/data:ro \
+            -v ${{ github.workspace }}/results/${{ matrix.sequence }}:/results \
+            ekf-vio:regression \
+            bash -c "
+              source /opt/ros/jazzy/setup.bash &&
+              cd /ws &&
+              install/ekf_vio/lib/ekf_vio/euroc_runner \
+                /data \
+                src/ekf-vio/config/euroc.yaml \
+              && mv euroc_traj.csv /results/euroc_traj.csv
+            "
+
+      # ── Compute RPE / ATE metrics ────────────────────────────────────────
+      - name: Evaluate trajectory
+        run: |
+          pip install numpy --quiet
+          python3 scripts/evaluate_euroc.py \
+            --est     results/${{ matrix.sequence }}/euroc_traj.csv \
+            --gt      ~/.cache/ekf-vio-data/${{ matrix.sequence }}/mav0/state_groundtruth_estimate0/data.csv \
+            --out     results/${{ matrix.sequence }} \
+            --no-plot
+
+      # ── Regression gate ──────────────────────────────────────────────────
+      - name: Check regression
+        run: |
+          python3 scripts/check_regression.py \
+            --metrics   results/${{ matrix.sequence }}/metrics.csv \
+            --baselines test/regression/baselines.json \
+            --sequence  ${{ matrix.sequence }} \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.update_baseline) && '--update-baseline' || '' }}
+
+      # ── Upload results as artifact ───────────────────────────────────────
+      # Always upload so failures can be diagnosed from the metrics CSV.
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-${{ matrix.sequence }}-${{ github.sha }}
+          path: results/${{ matrix.sequence }}/
+          retention-days: 30

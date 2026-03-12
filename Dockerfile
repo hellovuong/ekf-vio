@@ -61,6 +61,26 @@ RUN source /opt/ros/jazzy/setup.bash && \
         -DUSE_COVERAGE=ON
 
 # ═══════════════════════════════════════════════════════════════
+# Stage: release — optimised build for regression / benchmarks
+#
+#   docker build --target release -t ekf-vio:release .
+# ═══════════════════════════════════════════════════════════════
+FROM deps AS release
+
+WORKDIR /ws
+COPY . /ws/src/ekf-vio
+
+RUN source /opt/ros/jazzy/setup.bash && \
+    colcon build \
+      --event-handlers compile_commands+ console_cohesion+ \
+      --packages-select ekf_vio \
+      --cmake-args \
+        -GNinja \
+        -DBUILD_TESTING=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+# ═══════════════════════════════════════════════════════════════
 # Stage: test — run unit tests (CI stops here)
 #
 #   docker build --target test .
