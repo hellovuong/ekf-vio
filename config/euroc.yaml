@@ -58,6 +58,7 @@ tracker:
   min_disparity:        1.0   # pixels
   max_disparity:      200.0   # pixels
   stereo_search_radius: 40   # ZNCC 1-D search half-width around left x (px); raise for close objects
+  use_lk_stereo:      false  # true = LK optical-flow stereo; false = ZNCC patch matching (default)
   ransac_thresh_px:     1.0   # E-matrix RANSAC inlier threshold (px)
   epipolar_thresh_px: 3.0   # max vertical disparity for rectified stereo (px)
 
