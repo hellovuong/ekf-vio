@@ -4,6 +4,7 @@
 #include "ekf_vio/stereo_tracker.hpp"
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -30,6 +31,15 @@ void makeShiftedStereoPair(int w, int h, int disparity_px, cv::Mat& left, cv::Ma
   right = cv::Mat::zeros(h, w, CV_8U);
   // right(u, v) = left(u + d, v)  => correspondence: u_r = u_l - d
   left.colRange(disparity_px, w).copyTo(right.colRange(0, w - disparity_px));
+}
+
+// Right image shifted both horizontally (disparity) and vertically (row_shift_px).
+// Used to exercise epipolar-violation rejection in the LK stereo matcher.
+void makeShiftedStereoPairWithRowOffset(int w, int h, int disparity_px, int row_shift_px,
+                                        cv::Mat& left, cv::Mat& right) {
+  makeShiftedStereoPair(w, h, disparity_px, left, right);
+  const cv::Mat M = (cv::Mat_<double>(2, 3) << 1, 0, 0, 0, 1, static_cast<double>(row_shift_px));
+  cv::warpAffine(right, right, M, right.size());
 }
 
 double medianDepth(const std::vector<ekf_vio::Feature>& features) {
@@ -144,6 +154,60 @@ TEST(StereoTrackerZncc, LargeDisparityBeyondSearchRadiusRejected) {
   cv::Mat right;
   // True disparity 60 px >> search_radius 20 px → strip misses the match.
   makeShiftedStereoPair(640, 480, 60, left, right);
+
+  const auto features = tracker.track(left, right);
+
+  EXPECT_LT(features.size(), 5u);
+}
+
+// ---------------------------------------------------------------------------
+// LK optical-flow stereo tests  (params_.use_lk_stereo = true)
+// ---------------------------------------------------------------------------
+
+// LK stereo should find correct disparity on a horizontally-shifted synthetic
+// pair, producing the expected triangulated depth.
+TEST(StereoTrackerLkStereo, MatchesKnownDisparity) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoTracker::Params p;
+  p.max_features = 300;
+  p.fast_threshold = 15;
+  p.min_disparity = 2.0;
+  p.max_disparity = 120.0;
+  p.use_lk_stereo = true;
+
+  ekf_vio::StereoTracker tracker(cam, p);
+
+  cv::Mat left;
+  cv::Mat right;
+  const int disparity_px = 28;
+  makeShiftedStereoPair(640, 480, disparity_px, left, right);
+
+  const auto features = tracker.track(left, right);
+
+  ASSERT_GT(features.size(), 40u);
+  const double expected_z = cam.fx * cam.baseline / static_cast<double>(disparity_px);
+  EXPECT_NEAR(medianDepth(features), expected_z, 0.5);
+}
+
+// The LK stereo matcher enforces the epipolar constraint: it rejects any match
+// where |Δv| > epipolar_thresh_px.  A right image shifted several rows down
+// should produce very few surviving features.
+TEST(StereoTrackerLkStereo, RejectsEpipolarViolation) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoTracker::Params p;
+  p.max_features = 300;
+  p.fast_threshold = 15;
+  p.min_disparity = 1.0;
+  p.max_disparity = 200.0;
+  p.epipolar_thresh_px = 2.0;
+  p.use_lk_stereo = true;
+
+  ekf_vio::StereoTracker tracker(cam, p);
+
+  cv::Mat left;
+  cv::Mat right;
+  // Right image shifted 10 rows down — far beyond the 2 px epipolar threshold.
+  makeShiftedStereoPairWithRowOffset(640, 480, 20, 10, left, right);
 
   const auto features = tracker.track(left, right);
 

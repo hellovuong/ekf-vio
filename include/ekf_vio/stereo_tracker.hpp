@@ -32,6 +32,7 @@ class StereoTracker {
     double min_disparity = 1.0;  // pixels (reject degenerate stereo)
     double max_disparity = 200.0;
     int stereo_search_radius = 50;    // ZNCC 1-D search half-width (px) around left position
+    bool use_lk_stereo = false;       // use LK optical-flow stereo instead of ZNCC
     double ransac_thresh_px = 1.5;    // for outlier rejection via E-matrix
     double epipolar_thresh_px = 3.0;  // max vertical disparity for rectified stereo match
     double min_track_quality = 0.001;

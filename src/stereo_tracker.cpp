@@ -109,7 +109,12 @@ std::vector<Feature> StereoTracker::track(const cv::Mat& img_left, const cv::Mat
   // -----------------------------------------------------------------------
   std::vector<cv::Point2f> right_pts;
   std::vector<uchar> status_stereo;
-  stereoMatchUsingSAD(img_left, img_right, left_pts_all, right_pts, status_stereo);
+  if (params_.use_lk_stereo) {
+    stereoMatchUsingOpticalFlowWithInitGuess(img_left, img_right, left_pts_all, right_pts,
+                                             status_stereo);
+  } else {
+    stereoMatchUsingSAD(img_left, img_right, left_pts_all, right_pts, status_stereo);
+  }
 
   // ── Debug: save stereo match image ───────────────────────────────────────
   if (!params_.debug_save_dir.empty()) {
@@ -342,7 +347,9 @@ void StereoTracker::rejectOutliers(std::vector<cv::Point2f>& prev, std::vector<c
   }
 }
 
+// only debug code from here so it doesn't count into Code Cov
 // ---------------------------------------------------------------------------
+// LCOV_EXCL_START
 void StereoTracker::saveFlowImage(const cv::Mat& img_left, const std::vector<cv::Point2f>& prev_pts,
                                   const std::vector<cv::Point2f>& curr_pts,
                                   const std::vector<uchar>& status_temporal,
@@ -400,5 +407,6 @@ void StereoTracker::saveStereoImage(const cv::Mat& img_left, const cv::Mat& img_
   cv::imwrite(path.string(), vis);
   get_logger()->debug("[Tracker] saved stereo debug image: {}", path.string());
 }
+// LCOV_EXCL_STOP
 
 }  // namespace ekf_vio
