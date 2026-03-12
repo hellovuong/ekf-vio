@@ -66,6 +66,92 @@ TEST(StereoTrackerTest, TriangulatesExpectedDepthFromKnownDisparity) {
   EXPECT_NEAR(med_z, expected_z, 0.25);
 }
 
+// ---------------------------------------------------------------------------
+// ZNCC-specific tests
+// ---------------------------------------------------------------------------
+
+// ZNCC uses zero-mean NCC which subtracts the per-patch mean before
+// correlation, making it invariant to uniform brightness scaling between
+// the left and right cameras.  Plain SAD would fail this test.
+TEST(StereoTrackerZncc, IlluminationInvariantMatch) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoTracker::Params p;
+  p.max_features = 300;
+  p.fast_threshold = 15;
+  p.min_disparity = 2.0;
+  p.max_disparity = 120.0;
+
+  ekf_vio::StereoTracker tracker(cam, p);
+
+  cv::Mat left;
+  cv::Mat right;
+  const int disparity_px = 28;
+  makeShiftedStereoPair(640, 480, disparity_px, left, right);
+
+  // Scale right image by 1.5x to simulate different camera gain.
+  // ZNCC subtracts the patch mean so this should not affect matching quality.
+  cv::Mat right_gained;
+  right.convertTo(right_gained, CV_8U, 1.5, 0);
+
+  const auto features = tracker.track(left, right_gained);
+
+  ASSERT_GT(features.size(), 40u);
+  const double expected_z = cam.fx * cam.baseline / static_cast<double>(disparity_px);
+  EXPECT_NEAR(medianDepth(features), expected_z, 0.5);
+}
+
+// A random-noise right image has no structural correlation with the left.
+// The NCC acceptance threshold (≥ 0.85) should reject all candidates,
+// yielding zero (or near-zero) matched features.
+TEST(StereoTrackerZncc, RejectsRandomRightImage) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoTracker::Params p;
+  p.max_features = 300;
+  p.fast_threshold = 15;
+  p.min_disparity = 1.0;
+  p.max_disparity = 200.0;
+
+  ekf_vio::StereoTracker tracker(cam, p);
+
+  cv::Mat left;
+  cv::Mat dummy;
+  makeShiftedStereoPair(640, 480, 20, left, dummy);  // only need left
+
+  cv::Mat right_noise(480, 640, CV_8U);
+  cv::RNG rng(42);
+  rng.fill(right_noise, cv::RNG::UNIFORM, 0, 255);
+
+  const auto features = tracker.track(left, right_noise);
+
+  EXPECT_LT(features.size(), 5u);
+}
+
+// When the true disparity exceeds stereo_search_radius the search strip
+// [u_L - search_radius, u_L] never covers the true right-image position,
+// so no candidates pass the NCC threshold.
+TEST(StereoTrackerZncc, LargeDisparityBeyondSearchRadiusRejected) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoTracker::Params p;
+  p.max_features = 300;
+  p.fast_threshold = 15;
+  p.min_disparity = 1.0;
+  p.max_disparity = 200.0;
+  p.stereo_search_radius = 20;  // tight window
+
+  ekf_vio::StereoTracker tracker(cam, p);
+
+  cv::Mat left;
+  cv::Mat right;
+  // True disparity 60 px >> search_radius 20 px → strip misses the match.
+  makeShiftedStereoPair(640, 480, 60, left, right);
+
+  const auto features = tracker.track(left, right);
+
+  EXPECT_LT(features.size(), 5u);
+}
+
+// ---------------------------------------------------------------------------
+
 TEST(StereoTrackerTest, KeepsFeatureIdsAcrossFrames) {
   const auto cam = makeCamera();
   ekf_vio::StereoTracker::Params p;

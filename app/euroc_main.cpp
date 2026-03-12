@@ -5,14 +5,16 @@
 //  Standalone EuRoC dataset runner for EKF-VIO
 //
 //  Usage:  ./euroc_runner <path_to_sequence> [config.yaml] [--connect [host:port]]
-//  [--save-rerun-file [file.rrd]]
+//  [--save-rerun-file [file.rrd]] [--debug]
 //
 //  Without Rerun flags: runs headless with per-stage timing.
 //  With --connect / --save-rerun-file: streams visualisation to Rerun (requires -DWITH_RERUN=ON).
+//  With --debug: sets logger to debug level; also logs per-frame track/stereo debug images to
+//  Rerun (debug/left_track, debug/stereo_right) when a Rerun flag is also given.
 // ============================================================================
 
 #include "ekf_vio/config.hpp"
-#include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 #include "ekf_vio/euroc_reader.hpp"
 #include "ekf_vio/logging.hpp"
 #include "ekf_vio/stereo_rectifier.hpp"
@@ -45,6 +47,12 @@ struct RerunLogData {
   float fx{0.f}, fy{0.f}, img_w{0.f}, img_h{0.f};
   cv::Mat rect_left;                     // grayscale; shallow-copy is safe (ref-counted)
   std::vector<Eigen::Vector3d> pts_cam;  // raw p_c in camera frame; transform done in log thread
+
+  // Debug-mode fields (populated only when --debug is active)
+  bool debug_mode{false};
+  cv::Mat rect_right;                           // right rectified image
+  std::vector<std::array<float, 2>> left_kps;   // tracked feature positions on left image
+  std::vector<std::array<float, 2>> right_kps;  // stereo match positions on right image
 };
 #endif  // EKF_VIO_WITH_RERUN
 
@@ -58,13 +66,14 @@ int main(int argc, char** argv) {
   if (argc < 2) {
     log->error(
         "Usage: {} <euroc_sequence_path> [config.yaml] [--connect [host:port]] [--save-rerun-file "
-        "[file.rrd]]",
+        "[file.rrd]] [--debug]",
         argv[0]);
     return 1;
   }
 
-  // ── Parse optional Rerun flags ──────────────────────────────────────────
+  // ── Parse optional flags ─────────────────────────────────────────────────
   bool want_rerun = false;
+  bool debug_mode = false;
   std::string rerun_mode = "connect";
   std::string rerun_addr = "127.0.0.1:9876";
   std::string rerun_file = "ekf_vio.rrd";
@@ -79,7 +88,14 @@ int main(int argc, char** argv) {
       want_rerun = true;
       rerun_mode = "save";
       if (i + 1 < argc && argv[i + 1][0] != '-') rerun_file = argv[++i];
+    } else if (arg == "--debug") {
+      debug_mode = true;
     }
+  }
+
+  if (debug_mode) {
+    log->set_level(spdlog::level::debug);
+    log->debug("Debug mode enabled");
   }
 
 #ifndef EKF_VIO_WITH_RERUN
@@ -115,8 +131,16 @@ int main(int argc, char** argv) {
   auto cam = makeStereoCamera(rectifier, cfg.camera);
 
   // ── Initialise VIO subsystems ────────────────────────────────────────────
-  EKF ekf(cam, toNoiseParams(cfg.imu, cfg.ekf));
-  StereoTracker tracker(cam, toTrackerParams(cfg.tracker));
+  EKFRk4 ekf(cam, toNoiseParamsRK4(cfg.imu, cfg.ekf));
+
+  auto tracker_params = toTrackerParams(cfg.tracker);
+  if (debug_mode) {
+    tracker_params.debug_save_dir = "debug_frames";
+    tracker_params.debug_save_start_frame = 0;
+    tracker_params.debug_save_count = 5;
+    log->debug("Tracker debug frames will be saved to: debug_frames/");
+  }
+  StereoTracker tracker(cam, tracker_params);
 
   bool initialized = false;
   double last_imu_time = 0.0;
@@ -147,7 +171,7 @@ int main(int argc, char** argv) {
   rerun::RecordingStream rec("ekf_vio");
   if (want_rerun) {
     rerun::Error err;
-    if (rerun_mode == "save-rerun-file") {
+    if (rerun_mode == "save") {
       err = rec.save(rerun_file);
       log->info("Rerun: saving to '{}'", rerun_file);
     } else {
@@ -224,6 +248,39 @@ int main(int argc, char** argv) {
           rec.log(
               "world/landmarks",
               rerun::Points3D(pts3d).with_colors({rerun::Color(255, 200, 0)}).with_radii({0.01f}));
+        }
+
+        // Debug: per-frame tracked features and stereo matches
+        if (data.debug_mode) {
+          // Left image with tracked feature overlay (green dots)
+          cv::Mat rgb_left;
+          cv::cvtColor(data.rect_left, rgb_left, cv::COLOR_GRAY2RGB);
+          rec.log(
+              "debug/left_track",
+              rerun::Image::from_rgb24(
+                  rerun::borrow(rgb_left.data, rgb_left.total() * rgb_left.channels()),
+                  {static_cast<uint32_t>(rgb_left.cols), static_cast<uint32_t>(rgb_left.rows)}));
+          if (!data.left_kps.empty()) {
+            rec.log("debug/left_track", rerun::Points2D(data.left_kps)
+                                            .with_colors({rerun::Color(0, 230, 0)})
+                                            .with_radii({3.0f}));
+          }
+
+          // Right image with stereo match overlay (orange dots)
+          if (!data.rect_right.empty()) {
+            cv::Mat rgb_right;
+            cv::cvtColor(data.rect_right, rgb_right, cv::COLOR_GRAY2RGB);
+            rec.log("debug/stereo_right",
+                    rerun::Image::from_rgb24(
+                        rerun::borrow(rgb_right.data, rgb_right.total() * rgb_right.channels()),
+                        {static_cast<uint32_t>(rgb_right.cols),
+                         static_cast<uint32_t>(rgb_right.rows)}));
+            if (!data.right_kps.empty()) {
+              rec.log("debug/stereo_right", rerun::Points2D(data.right_kps)
+                                                .with_colors({rerun::Color(255, 140, 0)})
+                                                .with_radii({3.0f}));
+            }
+          }
         }
       }
     });
@@ -326,6 +383,17 @@ int main(int argc, char** argv) {
             log_data.pts_cam.reserve(features.size());
             for (const auto& f : features)
               log_data.pts_cam.push_back(f.p_c);
+          }
+
+          if (debug_mode) {
+            log_data.debug_mode = true;
+            log_data.rect_right = rect_right;  // shallow copy; ref-counted
+            log_data.left_kps.reserve(features.size());
+            log_data.right_kps.reserve(features.size());
+            for (const auto& f : features) {
+              log_data.left_kps.push_back({static_cast<float>(f.u_l), static_cast<float>(f.v_l)});
+              log_data.right_kps.push_back({static_cast<float>(f.u_r), static_cast<float>(f.v_r)});
+            }
           }
 
           {

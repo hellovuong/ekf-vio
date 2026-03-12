@@ -56,6 +56,7 @@ find_package(yaml-cpp REQUIRED)
 # ──────────────────────────────────────────────────────────────────────────────
 add_library(ekf_vio_core
     src/ekf.cpp
+    src/ekf_rk4.cpp
     src/stereo_tracker.cpp
     src/stereo_vo.cpp
     src/stereo_rectifier.cpp

@@ -5,7 +5,7 @@
 
 ## Demo
 
-[![EuRoC V1_01_easy camera 2D/3D features overlaid via [Rerun](https://rerun.io).](https://img.youtube.com/vi/pMtEjQT37do/maxresdefault.jpg)](https://youtu.be/pMtEjQT37do)
+[![Watch the video](https://img.youtube.com/vi/1o1soGQvovo/maxresdefault.jpg)](https://youtu.be/1o1soGQvovo)
 
 ---
 

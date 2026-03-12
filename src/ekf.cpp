@@ -390,26 +390,31 @@ void EKF::updateFromPose(const Sophus::SE3d& T_meas, double sigma_p, double sigm
 EKF::PVQ EKF::integrateRK4(const PVQ& pvq, const Eigen::Vector3d& omega_c,
                            const Eigen::Vector3d& a_c, double dt) const {
   const Eigen::Vector3d g = gravity();
-
-  // RK4 for position and velocity; rotation integrated via SO3 exp map
-  const Eigen::Matrix3d R = pvq.R.matrix();
-
   // k1
   const Eigen::Vector3d dp1 = pvq.v;
-  const Eigen::Vector3d dv1 = R * a_c + g;
+  const Eigen::Vector3d dv1 = pvq.R.matrix() * a_c + g;
 
   // k2 (use mid-point velocity from k1)
+  // we move dt / 2 forward using the slopes from k1
+  // predict vel at t + (dt / 2) = v_t + 0.5 * dt * dv1
   const Eigen::Vector3d v2 = pvq.v + 0.5 * dt * dv1;
+  // predict rot at t + (dt / 2) = R_t * Exp(omega_c * 0.5 * t)
   const Eigen::Matrix3d R2 = (pvq.R * Sophus::SO3d::exp(omega_c * 0.5 * dt)).matrix();
+  // new pos in the slope using predicted velocity
   const Eigen::Vector3d& dp2 = v2;
+  // new vel in the slop using predict rotation
   const Eigen::Vector3d dv2 = R2 * a_c + g;
 
   // k3 (same mid-point rotation as k2)
+  // we go back to the start and love dt / 2 forward again but using better slopes from k2
+  // A refined vel predicted for mid-point
   const Eigen::Vector3d v3 = pvq.v + 0.5 * dt * dv2;
   const Eigen::Vector3d& dp3 = v3;
+  // assume omega_c is constant R2 is reused
   const Eigen::Vector3d dv3 = R2 * a_c + g;
 
   // k4 (full step rotation)
+  // move a full dt forward using the slopes from k3
   const Eigen::Vector3d v4 = pvq.v + dt * dv3;
   const Eigen::Matrix3d R4 = (pvq.R * Sophus::SO3d::exp(omega_c * dt)).matrix();
   const Eigen::Vector3d& dp4 = v4;
