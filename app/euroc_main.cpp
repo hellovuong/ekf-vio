@@ -14,7 +14,7 @@
 // ============================================================================
 
 #include "ekf_vio/config.hpp"
-#include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 #include "ekf_vio/euroc_reader.hpp"
 #include "ekf_vio/logging.hpp"
 #include "ekf_vio/stereo_rectifier.hpp"
@@ -131,8 +131,8 @@ int main(int argc, char** argv) {
   auto cam = makeStereoCamera(rectifier, cfg.camera);
 
   // ── Initialise VIO subsystems ────────────────────────────────────────────
-  EKF ekf(cam, toNoiseParams(cfg.imu, cfg.ekf));
-  StereoTracker tracker(cam, toTrackerParams(cfg.tracker));
+  EKFRk4 ekf(cam, toNoiseParamsRK4(cfg.imu, cfg.ekf));
+
   auto tracker_params = toTrackerParams(cfg.tracker);
   if (debug_mode) {
     tracker_params.debug_save_dir = "debug_frames";
