@@ -113,6 +113,97 @@ where `g = [0, 0, −9.81]ᵀ` m/s² (world frame, z-up convention).
 The predict step integrates three coupled ODEs simultaneously over each IMU interval dt:
 the **nominal state** (p, v, R), the **transition matrix** Φ, and the **discrete noise** Q_d.
 
+### 4.0 Theory and Motivation
+
+#### Why RK4 over Euler integration?
+
+A naive first-order (Euler) discretisation of the state ODE gives:
+
+```
+x_{k+1} ≈ x_k + f(x_k) · dt          O(dt²) local, O(dt) global error
+Φ ≈ I + F·dt                           same truncation order
+P_{k+1} = Φ · P_k · Φᵀ + G·Q_c·Gᵀ·dt
+```
+
+At 200 Hz (dt ≈ 5 ms) this is marginally acceptable for slow motion, but it
+accumulates significant error for aggressive manoeuvres and over long trajectories.
+
+**4th-order Runge-Kutta (RK4)** achieves O(dt⁵) local truncation error (O(dt⁴) global)
+by evaluating derivatives at four intermediate points within the interval and
+forming a weighted average.  For the same 5 ms step, RK4 reduces integration
+error by a factor of roughly (dt)² ≈ 2.5×10⁻⁵ compared to Euler —
+negligible compared to IMU noise.
+
+#### The coupled ODE system
+
+The predict step must integrate three quantities simultaneously because they are
+mutually dependent:
+
+```
+ẋ  = f(x, u)           Nominal state kinematics  (depends on current R)
+Φ̇  = F(x) · Φ          Transition matrix ODE     (depends on current F, which depends on x)
+Q̇_d = F·Q_d + Q_d·Fᵀ + GQ_cGᵀ   Discrete noise ODE  (depends on current F and Q_d)
+```
+
+with initial conditions `Φ(0) = I₁₅`,  `Q_d(0) = 0₁₅`.
+
+Integrating them together with the same RK4 weights ensures that all three
+quantities are consistent at the same intermediate rotation — a critical
+property because F depends on R through the `−R·[a_c]×` block (see §5).
+
+#### Exact SO(3) rotation integration
+
+The rotation ODE `Ṙ = R · [ω_c]×` lives on the Lie group SO(3), not in ℝ⁹.
+Integrating it with Euler (`R_{k+1} ≈ R_k + R_k·[ω_c]×·dt`) produces a matrix
+that drifts off SO(3) (det ≠ 1, R·Rᵀ ≠ I) and must be re-orthonormalised.
+
+Instead, we use the **matrix exponential** (Rodrigues formula):
+
+```
+R(t + τ) = R(t) · Exp(ω_c · τ)
+```
+
+where `Exp : ℝ³ → SO(3)` is computed exactly:
+
+```
+θ = ‖ω_c · τ‖
+Exp(ω_c · τ) = I + (sinθ/θ)·[ω_c·τ]× + ((1−cosθ)/θ²)·[ω_c·τ]×²
+```
+
+This keeps R exactly on the manifold at every RK4 stage.  The p and v components
+are still integrated in ℝ³ with standard RK4 arithmetic.
+
+#### Derivation of the discrete noise ODE
+
+Starting from the continuous Lyapunov equation for covariance propagation:
+
+```
+Ṗ = F·P + P·Fᵀ + G·Q_c·Gᵀ
+```
+
+We want the discrete-time equivalent:  given `P_k` at time t, find `P_{k+1}` at t+dt.
+Factoring out `P_{k+1} = Φ·P_k·Φᵀ + Q_d`, the additive noise term Q_d satisfies
+the **matrix differential equation**:
+
+```
+Q̇_d = F(t)·Q_d(t) + Q_d(t)·F(t)ᵀ + G·Q_c·Gᵀ,     Q_d(0) = 0
+```
+
+This is a Lyapunov-like ODE driven by the constant noise source `GQ_cGᵀ`.
+Integrating it with the same RK4 weights as the state gives the correct
+discrete additive noise for that interval without approximation.
+
+The transition matrix Φ satisfies its own matrix ODE:
+
+```
+Φ̇ = F(t) · Φ,     Φ(0) = I
+```
+
+RK4 on this equation gives an O(dt⁴) accurate state transition matrix — far
+better than the `Φ ≈ I + F·dt` first-order approximation.
+
+---
+
 ### 4.1 IMU Bracketing and Midpoint Interpolation
 
 Two IMU readings bracket the interval: `[imu_prev, imu_curr]`.
@@ -468,4 +559,4 @@ Standard Kalman update with LDLT decomposition on the 6×6 innovation matrix.
 
 ---
 
-*Generated from source: `src/ekf_rk4.cpp`, `include/ekf_vio/types.hpp`*
+*Source references: `src/ekf_rk4.cpp`, `include/ekf_vio/ekf_rk4.hpp`, `include/ekf_vio/types.hpp`*

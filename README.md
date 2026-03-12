@@ -3,6 +3,38 @@
 [![CI](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml/badge.svg)](https://github.com/hellovuong/ekf-vio/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/hellovuong/ekf-vio/graph/badge.svg?token=D3YZ4MI6M4)](https://codecov.io/github/hellovuong/ekf-vio)
 
+---
+
+## Table of Contents
+
+- [Demo](#demo)
+- [Architecture](#architecture)
+- [Benchmarks](#benchmarks)
+- [State Vector](#state-vector)
+- [Mathematics](#mathematics)
+  - [Predict Step — RK4 IMU Integration](#predict-step--rk4-imu-integration)
+  - [Update Step — Stereo Reprojection](#update-step-stereo-reprojection)
+- [Feature Tracker](#feature-tracker)
+- [Stereo Visual Odometry](#stereo-visual-odometry)
+- [File Layout](#file-layout)
+- [Dependencies](#dependencies)
+- [Building](#building)
+  - [ROS 2 Workspace](#ros-2-workspace-full-build)
+  - [Docker](#docker)
+- [Running](#running)
+  - [ROS 2 Node](#ros-2-node-have-not-tested)
+  - [Standalone EuRoC Runner](#standalone-euroc-runner-tested-with-v1_01_easy)
+  - [Rerun Visualization](#rerun-visualization-requires--dwith_rerunon)
+  - [Process Monitor](#process-monitor)
+  - [Evaluation](#evaluation)
+- [Testing](#testing)
+- [Tuning Guide](#tuning-guide)
+- [Development](#development)
+- [Known Limitations & Next Steps](#known-limitations--next-steps)
+- [License](#license)
+
+---
+
 ## Demo
 
 [![Watch the video](https://img.youtube.com/vi/1o1soGQvovo/maxresdefault.jpg)](https://youtu.be/1o1soGQvovo)
@@ -108,44 +140,39 @@ The **error state** δx ∈ ℝ¹⁵ uses a rotation-vector for orientation erro
 
 ## Mathematics
 
-### Predict Step (IMU Mechanisation)
+### Predict Step — RK4 IMU Integration
 
-The IMU drives the filter at high rate.  Bias-corrected measurements are:
+The IMU drives the filter at ~200 Hz.  Bias-corrected inputs:
 
 ```
-ω_c = ω_meas - b_g        (angular velocity)
-a_c = a_meas - b_a        (specific force)
+ω_c = ω_meas − b_g        (angular velocity)
+a_c = a_meas − b_a        (specific force)
 ```
 
-State derivatives (continuous time):
+Continuous-time kinematics (nominal state):
 
 ```
 ṗ = v
-v̇ = R·a_c + g_w
-q̇ = q ⊗ [0, ω_c/2]      (quaternion kinematics)
-ḃ_g = 0,  ḃ_a = 0        (random walk model)
+v̇ = R_wb · a_c + g        (specific force rotated to world + gravity)
+Ṙ = R_wb · [ω_c]×         (rotation ODE on SO(3))
+ḃ_g = 0,  ḃ_a = 0         (random-walk biases, driven by noise only)
 ```
 
-Integration: **4th-order Runge-Kutta** for p, v, q.
-
-#### Error-State Linearisation  F (15×15)
-
-```
-F = [ 0   I   0          0        0   ]   ← ṗ
-    [ 0   0  -R[a_c]×    0       -R   ]   ← v̇
-    [ 0   0  -[ω_c]×    -I        0   ]   ← θ̇
-    [ 0   0   0          0        0   ]   ← ḃ_g
-    [ 0   0   0          0        0   ]   ← ḃ_a
-```
-
-Covariance propagation:
+**4th-order Runge-Kutta** integrates the nominal state (p, v, R), the
+error-state transition matrix Φ, and the discrete noise matrix Q_d
+simultaneously as a single coupled ODE system.  After one IMU interval dt:
 
 ```
-Φ  = I + F·Δt            (first-order, valid at 200 Hz)
-P  ← Φ P Φᵀ + G Q_c Gᵀ Δt
+P_new = Φ · P_old · Φᵀ + Q_d
 ```
 
-where G maps continuous noise (gyro, accel, bias) into the error state.
+Rotation is integrated exactly on SO(3) via the matrix exponential — no
+small-angle approximation.  This gives O(dt⁵) local truncation error on
+the state and O(dt⁴) on the covariance, which is more than adequate at 200 Hz.
+
+See the [Mathematical Reference](docs/ekf_vio_math.md#4-predict--full-rk4-integration)
+for the complete derivation including the Lyapunov noise ODE, bracketed IMU
+interpolation, and all four RK4 stage evaluations.
 
 ---
 
@@ -230,24 +257,28 @@ ekf-vio/
 │   └── euroc_reader.cpp       # CSV parsing + timeline merge
 ├── app/
 │   ├── vio_node.cpp           # ROS 2 VIO node
-│   ├── euroc_main.cpp         # Standalone EuRoC runner (EKF-VIO)
+│   ├── euroc_main.cpp         # Standalone EuRoC runner (EKF-VIO; Rerun optional)
 │   └── euroc_vo_main.cpp      # Standalone EuRoC runner (VO-only)
 ├── test/
 │   ├── ekf_test.cpp           # EKF unit tests (GTest)
 │   ├── stereo_tracker_test.cpp
-│   └── stereo_vo_test.cpp
+│   ├── stereo_vo_test.cpp
+│   └── regression/
+│       └── baselines.json     # RPE regression thresholds per sequence
 ├── config/
 │   └── euroc.yaml             # Parameters for EuRoC dataset
 ├── launch/
 │   └── vio.launch.py          # ROS 2 launch file
 ├── scripts/
-│   ├── evaluate_euroc.py      # ATE/RPE evaluation + plotting
+│   ├── evaluate_euroc.py      # ATE/RPE evaluation + trajectory plots
+│   ├── check_regression.py    # RPE regression gate (used by CI)
+│   ├── download_testdata.sh   # Download EuRoC sequences for regression CI
 │   ├── compare_vo_vio.py      # Compare VO vs VIO trajectories
 │   └── vio_observer.py        # Live CPU/RSS monitor for a running VIO process
 ├── docs/
-│   ├── results/               # RPE/ATE plots and trajectory CSVs
-│   └──
-├── Dockerfile                 # Multi-stage: deps → build → test → dev
+│   ├── ekf_vio_math.md        # Complete mathematical reference
+│   └── results/               # RPE/ATE plots and trajectory CSVs
+├── Dockerfile                 # Multi-stage: deps → build → release → test → dev
 ├── CMakeLists.txt
 ├── package.xml
 └── LICENSE                    # BSD 3-Clause
@@ -300,15 +331,25 @@ colcon build --packages-select ekf_vio \
 
 ### Docker
 
-The Dockerfile is multi-stage (`deps` → `build` → `test` → `dev`):
+The Dockerfile is multi-stage (`deps` → `build` → `release` → `test` → `dev`):
+
+| Target | Build type | Use case |
+|--------|-----------|----------|
+| `build` | Debug + coverage | Unit-test CI |
+| `release` | Release, no coverage | Regression / benchmarks |
+| `test` | Debug + coverage | Runs GTest suite + lcov |
+| `dev` | — | Local development (nvim, rosdep) |
 
 ```bash
 # Local development (default target — includes nvim, rosdep, etc.)
 docker build -t ekf-vio-dev .
 docker run -it --rm -v $(pwd):/workspace/src/ekf-vio ekf-vio-dev
 
-# Build + test only (same as CI)
+# Build + test only (same as CI unit-test job)
 docker build --target test -t ekf-vio-test .
+
+# Optimised build for regression / profiling
+docker build --target release -t ekf-vio:release .
 ```
 
 ---
@@ -372,8 +413,14 @@ python3 scripts/vio_observer.py --pid 12345 --interval 0.5
 # Single trajectory evaluation with plots
 python3 scripts/evaluate_euroc.py \
     --est euroc_traj.csv \
-    --gt /path/to/MH_01_easy/mav0/state_groundtruth_estimate0/data.csv \
-    --out results/MH_01
+    --gt /path/to/V1_01_easy/mav0/state_groundtruth_estimate0/data.csv \
+    --out results/V1_01_easy
+
+# Regression gate — checks RPE against baselines.json
+python3 scripts/check_regression.py \
+    --metrics results/V1_01_easy/metrics.csv \
+    --baselines test/regression/baselines.json \
+    --sequence V1_01_easy
 
 # Compare VO vs VIO
 python3 scripts/compare_vo_vio.py vo_traj.csv vio_traj.csv gt_data.csv
@@ -445,10 +492,18 @@ clang-tidy -p build/ekf_vio src/*.cpp
 ### CI
 
 GitHub Actions runs on every push/PR to `main`:
-- **build-and-test** — `docker build --target test` (the Dockerfile is the single source of truth for deps, build, and test)
-- **lint** — all pre-commit hooks
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | push / PR | `docker build --target test` — builds (Debug + coverage) and runs GTest suite |
+| `ci.yml` | push / PR | **lint** — all pre-commit hooks |
+| `regression.yml` | push / PR / Monday 03:00 UTC / manual | `docker build --target release` — runs `euroc_runner` on EuRoC sequences, gates on RPE baselines |
 
 Docker layer caching (`type=gha`) keeps subsequent CI runs fast.
+
+The regression workflow can be triggered manually from the GitHub Actions UI
+("Run workflow") with an optional sequence selector and an "Update baseline"
+checkbox to pin new RPE values after an intentional improvement.
 
 ---
 
