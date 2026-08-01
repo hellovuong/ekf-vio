@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 
 #include "ekf_vio/math_utils.hpp"
 #include "ekf_vio/types.hpp"
@@ -36,7 +37,32 @@ ekf_vio::EKF::NoiseParams defaultNoise() {
   n.sigma_gyro_bias = 1.9e-5;
   n.sigma_accel_bias = 3.0e-5;
   n.sigma_pixel = 1.5;
+  n.landmark_max_age = 5;
   return n;
+}
+
+ekf_vio::EKFRk4::NoiseParams defaultNoiseRk4() {
+  ekf_vio::EKFRk4::NoiseParams n;
+  n.sigma_gyro = 1.7e-4;
+  n.sigma_accel = 2.0e-3;
+  n.sigma_gyro_bias = 1.9e-5;
+  n.sigma_accel_bias = 3.0e-5;
+  n.sigma_pixel = 1.5;
+  n.landmark_max_age = 5;
+  return n;
+}
+
+ekf_vio::Feature makeFeatureAt(const ekf_vio::StereoCamera& cam, int id,
+                               const Eigen::Vector3d& p_c) {
+  const double inv_z = 1.0 / p_c.z();
+  ekf_vio::Feature f;
+  f.id = id;
+  f.u_l = (cam.fx * p_c.x() * inv_z) + cam.cx;
+  f.v_l = (cam.fy * p_c.y() * inv_z) + cam.cy;
+  f.u_r = (cam.fx * (p_c.x() - cam.baseline) * inv_z) + cam.cx;
+  f.v_r = f.v_l;
+  f.p_c = p_c;
+  return f;
 }
 
 // Build synthetic features (random landmarks in front of the camera)
@@ -444,6 +470,105 @@ TEST(EKFTest, EmptyFeaturesNoCrash) {
   ekf_vio::EKF ekf(cam, defaultNoise());
   ekf.update({});  // should not crash
   SUCCEED();
+}
+
+// ==========================================================================
+// Test: gated-out measurements must not overwrite landmark world positions.
+//
+// Trigger: one inlier keeps the update path alive while a second known track
+// fails the pixel gate and carries a poisoned triangulation. Without the fix,
+// the rejected feature still refreshes p_w and corrupts the map.
+// ==========================================================================
+TEST(EKFTest, RejectedMeasurementDoesNotCorruptLandmark) {
+  const auto cam = makeCamera();
+  ekf_vio::EKF ekf(cam, defaultNoise());
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  const Eigen::Vector3d p_a(0.0, 0.0, 4.0);
+  const Eigen::Vector3d p_b(0.5, 0.0, 4.0);
+  const auto feat_a = makeFeatureAt(cam, 1, p_a);
+  const auto feat_b = makeFeatureAt(cam, 2, p_b);
+
+  ekf.update({feat_a, feat_b});  // initialise landmarks
+  Eigen::Vector3d p_w_b_before;
+  ASSERT_TRUE(ekf.landmarkWorld(2, p_w_b_before));
+
+  // Frame 2: keep A as an inlier so posterior refinement runs, but reject B
+  // via a huge pixel residual while supplying a poisoned triangulation.
+  auto feat_b_bad = feat_b;
+  feat_b_bad.u_l += 80.0;
+  feat_b_bad.u_r += 80.0;
+  feat_b_bad.p_c = Eigen::Vector3d(2.0, 0.0, 4.0);
+
+  ekf.update({feat_a, feat_b_bad});
+
+  Eigen::Vector3d p_w_b_after;
+  ASSERT_TRUE(ekf.landmarkWorld(2, p_w_b_after));
+  EXPECT_NEAR((p_w_b_after - p_w_b_before).norm(), 0.0, 1e-12);
+}
+
+// Same regression for the production EKFRk4 path used by euroc_runner.
+TEST(EKFRk4Test, RejectedMeasurementDoesNotCorruptLandmark) {
+  const auto cam = makeCamera();
+  ekf_vio::EKFRk4 ekf(cam, defaultNoiseRk4());
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  const Eigen::Vector3d p_a(0.0, 0.0, 4.0);
+  const Eigen::Vector3d p_b(0.5, 0.0, 4.0);
+  const auto feat_a = makeFeatureAt(cam, 1, p_a);
+  const auto feat_b = makeFeatureAt(cam, 2, p_b);
+
+  ekf.update({feat_a, feat_b});
+  Eigen::Vector3d p_w_b_before;
+  ASSERT_TRUE(ekf.landmarkWorld(2, p_w_b_before));
+
+  auto feat_b_bad = feat_b;
+  feat_b_bad.u_l += 80.0;
+  feat_b_bad.u_r += 80.0;
+  feat_b_bad.p_c = Eigen::Vector3d(2.0, 0.0, 4.0);
+
+  ekf.update({feat_a, feat_b_bad});
+
+  Eigen::Vector3d p_w_b_after;
+  ASSERT_TRUE(ekf.landmarkWorld(2, p_w_b_after));
+  EXPECT_NEAR((p_w_b_after - p_w_b_before).norm(), 0.0, 1e-12);
+}
+
+// ==========================================================================
+// Test: landmark pruning still runs when every observation is a new ID.
+// Without the early-return prune, failed temporal tracking grows the map
+// without bound (hundreds of inserts/frame, no culling).
+// ==========================================================================
+TEST(EKFTest, PrunesLandmarksWhenAllFeaturesAreNew) {
+  const auto cam = makeCamera();
+  auto noise = defaultNoise();
+  noise.landmark_max_age = 2;
+  ekf_vio::EKF ekf(cam, noise);
+  ekf.state().T_wb = Sophus::SE3d();
+
+  // Seed a batch of landmarks
+  auto seed = makeSyntheticFeatures(cam, 40, /*base_id=*/0, /*seed=*/7);
+  ASSERT_GT(seed.size(), 10u);
+  ekf.update(seed);
+  const auto seeded = ekf.landmarkCount();
+  ASSERT_GT(seeded, 10u);
+
+  // Repeated all-new-ID frames: inserts keep happening, but aged seeds must
+  // be pruned even though M==0 causes an early return from the update body.
+  for (int frame = 0; frame < 6; ++frame) {
+    auto fresh = makeSyntheticFeatures(cam, 40, /*base_id=*/1000 + frame * 100, /*seed=*/100u + frame);
+    ekf.update(fresh);
+  }
+
+  // Seeded landmarks (age > max_age) must be gone; map stays bounded by the
+  // recent all-new inserts only (≤ 6 frames × ~40 features).
+  EXPECT_LT(ekf.landmarkCount(), seeded + 6u * 40u);
+  Eigen::Vector3d unused;
+  EXPECT_FALSE(ekf.landmarkWorld(seed.front().id, unused));
 }
 
 // ==========================================================================
