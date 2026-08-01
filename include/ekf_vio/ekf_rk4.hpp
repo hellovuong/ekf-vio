@@ -56,6 +56,13 @@ class EKFRk4 {
 
   const State& state() const { return state_; }
   State& state() { return state_; }
+  std::size_t landmarkCount() const { return landmarks_.size(); }
+  bool landmarkWorld(int id, Eigen::Vector3d& p_w) const {
+    const auto it = landmarks_.find(id);
+    if (it == landmarks_.end()) return false;
+    p_w = it->second.p_w;
+    return true;
+  }
 
  private:
   // -----------------------------------------------------------------------
@@ -94,6 +101,10 @@ class EKFRk4 {
                double& v_r) const;
   Eigen::Vector3d camToWorld(const Eigen::Vector3d& p_c) const;
   Eigen::Vector3d worldToCam(const Eigen::Vector3d& p_w) const;
+
+  // Drop landmarks older than landmark_max_age. Called on every update path,
+  // including early returns, so the map cannot grow without bound.
+  void pruneLandmarks();
 
   State state_;
   StereoCamera cam_;

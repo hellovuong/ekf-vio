@@ -94,14 +94,18 @@ void EKF::update(const std::vector<Feature>& features) {
         ++n_new_landmarks;
       }
     } else {
-      it->second.last_seen_frame = frame_count_;
+      // Do not bump last_seen yet — only accepted measurements keep a landmark
+      // alive. Rejected outliers must be allowed to age out of the map.
       meas_indices.push_back(i);
     }
   }
 
   const int M = static_cast<int>(meas_indices.size());
   get_logger()->debug("[EKF upd]   new_landmarks={}  meas_candidates={}", n_new_landmarks, M);
-  if (M == 0) return;
+  if (M == 0) {
+    pruneLandmarks();
+    return;
+  }
 
   // ------------------------------------------------------------------
   // Build stacked residuals z and Jacobians H, with outlier rejection
@@ -112,8 +116,10 @@ void EKF::update(const std::vector<Feature>& features) {
 
   std::vector<Eigen::Vector4d> residuals;
   std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+  std::vector<int> accepted_feat_indices;  // indices into features[]
   residuals.reserve(M);
   jacobians.reserve(M);
+  accepted_feat_indices.reserve(M);
 
   int n_behind_camera = 0;
   int n_pixel_gate_fail = 0;
@@ -202,6 +208,8 @@ void EKF::update(const std::vector<Feature>& features) {
 
     residuals.push_back(res);
     jacobians.push_back(H_i);
+    accepted_feat_indices.push_back(meas_indices[k]);
+    landmarks_.at(f.id).last_seen_frame = frame_count_;
   }
 
   // Cap to avoid oversized H matrices (keep top features by residual norm)
@@ -214,14 +222,18 @@ void EKF::update(const std::vector<Feature>& features) {
                       [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
     std::vector<Eigen::Vector4d> r2;
     std::vector<Eigen::Matrix<double, 4, 15>> j2;
+    std::vector<int> feat2;
     r2.reserve(max_meas);
     j2.reserve(max_meas);
+    feat2.reserve(max_meas);
     for (int i = 0; i < max_meas; ++i) {
       r2.push_back(residuals[idx[i]]);
       j2.push_back(jacobians[idx[i]]);
+      feat2.push_back(accepted_feat_indices[idx[i]]);
     }
     residuals = std::move(r2);
     jacobians = std::move(j2);
+    accepted_feat_indices = std::move(feat2);
   }
 
   get_logger()->debug(
@@ -229,7 +241,10 @@ void EKF::update(const std::vector<Feature>& features) {
       n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
 
   const auto N = static_cast<Eigen::Index>(residuals.size());
-  if (N == 0) return;
+  if (N == 0) {
+    pruneLandmarks();
+    return;
+  }
 
   // ------------------------------------------------------------------
   // Sequential Kalman update
@@ -303,20 +318,24 @@ void EKF::update(const std::vector<Feature>& features) {
   // ------------------------------------------------------------------
   // Posterior landmark refinement + age-based pruning.
   //
-  // Re-triangulate observed landmarks using the POSTERIOR state so they
-  // stay consistent with the updated estimate.  Landmarks that are NOT
-  // observed this frame keep their old world positions — when they are
-  // re-observed later the residual encodes multi-frame drift, which
-  // provides a stronger geometric constraint than frame-to-frame.
+  // Re-triangulate *accepted* landmarks using the POSTERIOR state so they
+  // stay consistent with the updated estimate.  Rejected measurements must
+  // not overwrite the map — otherwise outlier gating is defeated and a
+  // stereo mismatch can poison later updates.  Unobserved landmarks keep
+  // their old world positions for multi-frame geometric constraint.
   // ------------------------------------------------------------------
-  for (const auto& f : features) {
+  for (const int feat_idx : accepted_feat_indices) {
+    const Feature& f = features[feat_idx];
     auto it = landmarks_.find(f.id);
     if (it != landmarks_.end() && f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
       it->second.p_w = camToWorld(f.p_c);
     }
   }
 
-  // Prune stale landmarks (age-based sliding window)
+  pruneLandmarks();
+}
+
+void EKF::pruneLandmarks() {
   for (auto it = landmarks_.begin(); it != landmarks_.end();) {
     if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age) {
       it = landmarks_.erase(it);

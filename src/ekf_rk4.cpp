@@ -231,15 +231,18 @@ void EKFRk4::update(const std::vector<Feature>& features) {
         ++n_new_landmarks;
       }
     } else {
-      // Known landmark: mark it alive and queue for measurement update.
-      it->second.last_seen_frame = frame_count_;
+      // Do not bump last_seen yet — only accepted measurements keep a landmark
+      // alive. Rejected outliers must be allowed to age out of the map.
       meas_indices.push_back(i);
     }
   }
 
   const int M = static_cast<int>(meas_indices.size());
   get_logger()->debug("[EKFRk4 upd]   new_landmarks={}  meas_candidates={}", n_new_landmarks, M);
-  if (meas_indices.empty()) return;
+  if (meas_indices.empty()) {
+    pruneLandmarks();
+    return;
+  }
 
   // σ² = pixel noise variance; used in measurement covariance R_i = σ²·I₄
   const double sig2 = noise_.sigma_pixel * noise_.sigma_pixel;
@@ -249,8 +252,10 @@ void EKFRk4::update(const std::vector<Feature>& features) {
 
   std::vector<Eigen::Vector4d> residuals;
   std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+  std::vector<int> accepted_feat_indices;  // indices into features[]
   residuals.reserve(M);
   jacobians.reserve(M);
+  accepted_feat_indices.reserve(M);
 
   int n_behind_camera = 0;
   int n_pixel_gate_fail = 0;
@@ -358,6 +363,8 @@ void EKFRk4::update(const std::vector<Feature>& features) {
 
     residuals.push_back(res);
     jacobians.push_back(H_i);
+    accepted_feat_indices.push_back(meas_indices[k]);
+    landmarks_.at(f.id).last_seen_frame = frame_count_;
   }
 
   // ── Cap measurement count for runtime bound ────────────────────────────────
@@ -373,14 +380,18 @@ void EKFRk4::update(const std::vector<Feature>& features) {
                       [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
     std::vector<Eigen::Vector4d> r2;
     std::vector<Eigen::Matrix<double, 4, 15>> j2;
+    std::vector<int> feat2;
     r2.reserve(max_meas);
     j2.reserve(max_meas);
+    feat2.reserve(max_meas);
     for (int i = 0; i < max_meas; ++i) {
       r2.push_back(residuals[idx[i]]);
       j2.push_back(jacobians[idx[i]]);
+      feat2.push_back(accepted_feat_indices[idx[i]]);
     }
     residuals = std::move(r2);
     jacobians = std::move(j2);
+    accepted_feat_indices = std::move(feat2);
   }
 
   get_logger()->debug(
@@ -388,7 +399,10 @@ void EKFRk4::update(const std::vector<Feature>& features) {
       n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
 
   const auto N = static_cast<Eigen::Index>(residuals.size());
-  if (N == 0) return;
+  if (N == 0) {
+    pruneLandmarks();
+    return;
+  }
 
   // Measurement noise covariance R = σ²·I₄  (isotropic pixel noise, both cameras)
   const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
@@ -447,10 +461,12 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     state_.P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
   }
 
-  // ── Landmark update: refresh world position from latest triangulation ──────
-  // Re-project the triangulated p_c back to world frame using the *updated* pose.
-  // This keeps the landmark map consistent with the corrected state estimate.
-  for (const auto& f : features) {
+  // ── Landmark update: refresh world position from accepted triangulation ────
+  // Re-project accepted p_c back to world using the *updated* pose. Rejected
+  // measurements must not overwrite the map — otherwise outlier gating is
+  // defeated and a stereo mismatch can poison later updates.
+  for (const int feat_idx : accepted_feat_indices) {
+    const Feature& f = features[feat_idx];
     auto it = landmarks_.find(f.id);
     if (it != landmarks_.end() && f.p_c.z() > 0.2 && f.p_c.z() < 30.0) {
       it->second.p_w = camToWorld(f.p_c);
@@ -460,6 +476,10 @@ void EKFRk4::update(const std::vector<Feature>& features) {
   // ── Landmark culling: remove stale landmarks ───────────────────────────────
   // A landmark not observed for more than `landmark_max_age` consecutive frames
   // is dropped from the map to bound memory and avoid stale constraints.
+  pruneLandmarks();
+}
+
+void EKFRk4::pruneLandmarks() {
   for (auto it = landmarks_.begin(); it != landmarks_.end();) {
     if (frame_count_ - it->second.last_seen_frame > noise_.landmark_max_age) {
       it = landmarks_.erase(it);
