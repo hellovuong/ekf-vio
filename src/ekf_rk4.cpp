@@ -30,8 +30,20 @@ EKFRk4::EKFRk4(StereoCamera cam, const NoiseParams& noise) : cam_(std::move(cam)
 // PREDICT — full RK4 on (state, Φ, Q_d) with IMU midpoint interpolation
 // ---------------------------------------------------------------------------
 void EKFRk4::predict(const ImuData& imu, double dt) {
+  // ── Invalidate stale buffered IMU ───────────────────────────────────────
+  // Callers (euroc_runner, ROS node) skip predict() when dt<=0 or dt>0.5 but
+  // still advance their clock.  Without this check the next successful step
+  // would midpoint-interpolate against a sample from before the gap, injecting
+  // a large erroneous ω/a over a small dt and corrupting the pose.
+  if (has_prev_imu_) {
+    const double span = imu.timestamp - prev_imu_.timestamp;
+    if (span <= 0.0 || std::abs(span - dt) > 1e-3) {
+      has_prev_imu_ = false;
+    }
+  }
+
   // ── Bias-corrected start / end / midpoint IMU readings ──────────────────
-  // On the first call prev_imu_ is unset; fall back to ZOH (same as EKF).
+  // On the first call (or after a gap) prev_imu_ is unset; fall back to ZOH.
   const Eigen::Vector3d omega_start = (has_prev_imu_ ? prev_imu_.gyro : imu.gyro) - state_.b_g;
   const Eigen::Vector3d a_start = (has_prev_imu_ ? prev_imu_.accel : imu.accel) - state_.b_a;
   const Eigen::Vector3d omega_end = imu.gyro - state_.b_g;

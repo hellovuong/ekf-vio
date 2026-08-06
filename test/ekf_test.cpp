@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 
 #include "ekf_vio/math_utils.hpp"
 #include "ekf_vio/types.hpp"
@@ -444,6 +445,54 @@ TEST(EKFTest, EmptyFeaturesNoCrash) {
   ekf_vio::EKF ekf(cam, defaultNoise());
   ekf.update({});  // should not crash
   SUCCEED();
+}
+
+// ==========================================================================
+// Test: EKFRk4 falls back to ZOH when prev IMU does not bracket this step
+//
+// Production path (euroc_runner): predict() is skipped for dt<=0 or dt>0.5
+// while last_imu_time still advances.  Without invalidating the buffered
+// sample, the next successful step midpoint-interpolates a stale high-rate
+// reading over a tiny dt and corrupts orientation/velocity.
+// ==========================================================================
+TEST(EKFRk4Test, StalePrevImuAfterGapFallsBackToZOH) {
+  const auto cam = makeCamera();
+  ekf_vio::EKFRk4::NoiseParams noise;
+  noise.sigma_gyro = 1.7e-4;
+  noise.sigma_accel = 2.0e-3;
+  noise.sigma_gyro_bias = 1.9e-5;
+  noise.sigma_accel_bias = 3.0e-5;
+  noise.sigma_pixel = 1.5;
+
+  ekf_vio::EKFRk4 ekf(cam, noise);
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().b_g = Eigen::Vector3d::Zero();
+  ekf.state().b_a = Eigen::Vector3d::Zero();
+
+  // Establish prev_imu_ with a large gyro reading.
+  ekf_vio::ImuData imu_spin;
+  imu_spin.timestamp = 0.0;
+  imu_spin.gyro = Eigen::Vector3d(10.0, 0.0, 0.0);  // 10 rad/s
+  imu_spin.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
+  ekf.predict(imu_spin, 0.005);
+
+  const Eigen::Matrix3d R_after_spin = ekf.state().T_wb.rotationMatrix();
+
+  // Simulate the runner skipping a long gap (dt>0.5) then resuming with a
+  // quiet IMU over a normal 5 ms step.  Timestamp span (1.0s) disagrees with
+  // dt (0.005s) — stale buffer must be ignored.
+  ekf_vio::ImuData imu_quiet;
+  imu_quiet.timestamp = 1.0;
+  imu_quiet.gyro = Eigen::Vector3d::Zero();
+  imu_quiet.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
+  ekf.predict(imu_quiet, 0.005);
+
+  // With ZOH fallback: ω=0 → orientation unchanged across the quiet step.
+  // With the bug: ω_mid ≈ 5 rad/s → ~1.4° spurious rotation in 5 ms.
+  const Eigen::Matrix3d dR = R_after_spin.transpose() * ekf.state().T_wb.rotationMatrix();
+  const double angle = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
+  EXPECT_NEAR(angle, 0.0, 1e-9);
 }
 
 // ==========================================================================
