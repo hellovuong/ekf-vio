@@ -25,7 +25,9 @@ namespace ekf_vio {
 //      - Φ̇ = F(x)·Φ,  Φ(0)=I   → O(dt⁵) error on Φ
 //      - Q̇_d = F·P + P·F^T + GQG^T, P(0)=0  → O(dt⁵) error on Q_d
 //      - IMU readings linearly interpolated for k2/k3 midpoint
-//        (requires prev IMU buffered; falls back to ZOH on first step)
+//        (requires prev IMU buffered; falls back to ZOH on first step
+//         or when the buffer does not bracket the current dt — e.g. after
+//         the runner skips a gap with dt<=0 / dt>0.5)
 //
 //  Reference: maplab imu_integrator (imu-integrator-inl.h)
 //  https://github.com/ethz-asl/maplab/blob/master/algorithms/imu-integrator-rk4/include/imu-integrator/imu-integrator-inl.h
