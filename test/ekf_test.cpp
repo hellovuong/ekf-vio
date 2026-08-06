@@ -453,7 +453,7 @@ TEST(EKFTest, EmptyFeaturesNoCrash) {
 // Production path (euroc_runner): predict() is skipped for dt<=0 or dt>0.5
 // while last_imu_time still advances.  Without invalidating the buffered
 // sample, the next successful step midpoint-interpolates a stale high-rate
-// reading over a tiny dt and corrupts orientation/velocity.
+// reading over a tiny dt and corrupts velocity/pose.
 // ==========================================================================
 TEST(EKFRk4Test, StalePrevImuAfterGapFallsBackToZOH) {
   const auto cam = makeCamera();
@@ -470,14 +470,16 @@ TEST(EKFRk4Test, StalePrevImuAfterGapFallsBackToZOH) {
   ekf.state().b_g = Eigen::Vector3d::Zero();
   ekf.state().b_a = Eigen::Vector3d::Zero();
 
-  // Establish prev_imu_ with a large gyro reading.
-  ekf_vio::ImuData imu_spin;
-  imu_spin.timestamp = 0.0;
-  imu_spin.gyro = Eigen::Vector3d(10.0, 0.0, 0.0);  // 10 rad/s
-  imu_spin.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
-  ekf.predict(imu_spin, 0.005);
+  // Establish prev_imu_ with a huge specific-force reading (not gravity).
+  ekf_vio::ImuData imu_spike;
+  imu_spike.timestamp = 0.0;
+  imu_spike.gyro = Eigen::Vector3d::Zero();
+  imu_spike.accel = Eigen::Vector3d(100.0, 0.0, 9.81);
+  ekf.predict(imu_spike, 0.005);
 
-  const Eigen::Matrix3d R_after_spin = ekf.state().T_wb.rotationMatrix();
+  // Reset kinematic state so the post-gap step is the only contributor.
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
 
   // Simulate the runner skipping a long gap (dt>0.5) then resuming with a
   // quiet IMU over a normal 5 ms step.  Timestamp span (1.0s) disagrees with
@@ -488,11 +490,10 @@ TEST(EKFRk4Test, StalePrevImuAfterGapFallsBackToZOH) {
   imu_quiet.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
   ekf.predict(imu_quiet, 0.005);
 
-  // With ZOH fallback: ω=0 → orientation unchanged across the quiet step.
-  // With the bug: ω_mid ≈ 5 rad/s → ~1.4° spurious rotation in 5 ms.
-  const Eigen::Matrix3d dR = R_after_spin.transpose() * ekf.state().T_wb.rotationMatrix();
-  const double angle = std::acos(std::clamp((dR.trace() - 1.0) * 0.5, -1.0, 1.0));
-  EXPECT_NEAR(angle, 0.0, 1e-9);
+  // With ZOH fallback: a=(0,0,9.81) cancels gravity → |v| ≈ 0.
+  // With the bug: a_mid ≈ (50, 0, 9.81) → |v_x| ≈ 50*0.005 = 0.25 m/s.
+  EXPECT_NEAR(ekf.state().v.x(), 0.0, 1e-6);
+  EXPECT_NEAR(ekf.state().v.norm(), 0.0, 1e-4);
 }
 
 // ==========================================================================
