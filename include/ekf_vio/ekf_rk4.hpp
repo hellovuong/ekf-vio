@@ -24,7 +24,8 @@ namespace ekf_vio {
 //      - RK4 on (state, Φ, Q_d) simultaneously — one consistent integrator
 //      - Φ̇ = F(x)·Φ,  Φ(0)=I   → O(dt⁵) error on Φ
 //      - Q̇_d = F·P + P·F^T + GQG^T, P(0)=0  → O(dt⁵) error on Q_d
-//      - IMU readings linearly interpolated for k2/k3 midpoint
+//      - IMU readings linearly interpolated for k2/k3 midpoint and for the
+//        SO3 step R←R·Exp(ω_mid·dt) (∫ω dt under linear ω(t))
 //        (requires prev IMU buffered; falls back to ZOH on first step)
 //
 //  Reference: maplab imu_integrator (imu-integrator-inl.h)

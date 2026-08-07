@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 
 #include "ekf_vio/math_utils.hpp"
 #include "ekf_vio/types.hpp"
@@ -444,6 +445,56 @@ TEST(EKFTest, EmptyFeaturesNoCrash) {
   ekf_vio::EKF ekf(cam, defaultNoise());
   ekf.update({});  // should not crash
   SUCCEED();
+}
+
+// ==========================================================================
+// Test: EKFRk4 orientation uses midpoint gyro under linear ω(t)
+//
+// Production path (euroc_runner → EKFRk4::predict): consecutive IMU samples
+// bracket each step; ω_start comes from the buffered previous reading and
+// ω_end from the current one.  Under linear interpolation, ∫ω dt = ω_mid·dt.
+// Using Exp(ω_end·dt) for the state rotation ignores ω_start and doubles the
+// yaw increment on a pure gyro ramp (ω: 0 → 2 rad/s over dt).
+// ==========================================================================
+TEST(EKFRk4Test, OrientationUsesMidpointGyroOnRamp) {
+  const auto cam = makeCamera();
+  ekf_vio::EKFRk4::NoiseParams noise;
+  noise.sigma_gyro = 1.7e-4;
+  noise.sigma_accel = 2.0e-3;
+  noise.sigma_gyro_bias = 1.9e-5;
+  noise.sigma_accel_bias = 3.0e-5;
+  noise.sigma_pixel = 1.5;
+
+  ekf_vio::EKFRk4 ekf(cam, noise);
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().b_g = Eigen::Vector3d::Zero();
+  ekf.state().b_a = Eigen::Vector3d::Zero();
+
+  // Establish prev_imu_ with zero gyro.
+  ekf_vio::ImuData imu_start;
+  imu_start.timestamp = 0.0;
+  imu_start.gyro = Eigen::Vector3d::Zero();
+  imu_start.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
+  ekf.predict(imu_start, 0.005);
+
+  // Reset pose so only the next step contributes to orientation.
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+
+  constexpr double dt = 0.005;
+  constexpr double omega_z_end = 2.0;  // rad/s
+  ekf_vio::ImuData imu_end;
+  imu_end.timestamp = dt;
+  imu_end.gyro = Eigen::Vector3d(0.0, 0.0, omega_z_end);
+  imu_end.accel = Eigen::Vector3d(0.0, 0.0, 9.81);
+  ekf.predict(imu_end, dt);
+
+  // ω_mid = 1.0 → expected yaw = 0.005 rad.  Bug (ω_end) → 0.01 rad.
+  const double expected_yaw = 0.5 * omega_z_end * dt;
+  const Eigen::Matrix3d R = ekf.state().T_wb.rotationMatrix();
+  const double yaw = std::atan2(R(1, 0), R(0, 0));
+  EXPECT_NEAR(yaw, expected_yaw, 1e-9);
 }
 
 // ==========================================================================
