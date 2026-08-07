@@ -43,9 +43,13 @@ void EKFRk4::predict(const ImuData& imu, double dt) {
   const PVQ pvq0{.p = state_.T_wb.translation(), .v = state_.v, .R = state_.T_wb.so3()};
 
   // Exact midpoint and end rotations via SO3 exp (Lie group integration).
-  // These are fixed for all stages — omega is the gyro reading at that point.
+  // Under linear ω(t) between the buffered start/end samples, ∫ω dt = ω_mid·dt,
+  // so R(t+dt) = R·Exp(ω_mid·dt).  Using ω_end here (ZOH on the end sample)
+  // would ignore the buffered start reading and double the yaw increment on a
+  // gyro ramp — inconsistent with the midpoint IMU model used for v̇ and with
+  // the maplab RK4 reference (stage omegas collapse to ω_mid).
   const Sophus::SO3d R_mid = pvq0.R * Sophus::SO3d::exp(omega_mid * 0.5 * dt);
-  const Sophus::SO3d R_end = pvq0.R * Sophus::SO3d::exp(omega_end * dt);
+  const Sophus::SO3d R_end = pvq0.R * Sophus::SO3d::exp(omega_mid * dt);
 
   // ── RK4 initial conditions for matrix ODEs ───────────────────────────────
   //   Φ(0) = I  →  Φ(dt) = state transition matrix for this step
@@ -87,7 +91,7 @@ void EKFRk4::predict(const ImuData& imu, double dt) {
   // ── Apply state update ────────────────────────────────────────────────────
   state_.T_wb.translation() = pvq0.p + dt * k1_6 * (d1.dp + 2.0 * d2.dp + 2.0 * d3.dp + d4.dp);
   state_.v = pvq0.v + dt * k1_6 * (d1.dv + 2.0 * d2.dv + 2.0 * d3.dv + d4.dv);
-  state_.T_wb.so3() = R_end;  // exact rotation via SO3::exp(omega_end * dt)
+  state_.T_wb.so3() = R_end;  // SO3::exp(omega_mid * dt) under linear ω(t)
 
   // ── Apply covariance update ───────────────────────────────────────────────
   //   Φ  = I + (dt/6) · ΣdΦ        (O(dt⁵) accurate)
