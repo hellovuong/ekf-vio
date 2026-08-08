@@ -221,6 +221,54 @@ TEST(StereoVOTest, RejectsImplausibleMotion) {
 }
 
 // ==========================================================================
+// Test: rejected motion must NOT create a keyframe with stale T_wc_
+//
+// Production path (euroc_vo_runner): a large jump fails the sanity gate while
+// track count also drops below the KF threshold.  Creating a keyframe would
+// store current-camera landmarks under the previous pose and permanently
+// corrupt subsequent T_wc = T_kf * T_kf_curr composition.
+// ==========================================================================
+TEST(StereoVOTest, RejectedMotionDoesNotCreateDesyncedKeyframe) {
+  const auto cam = makeCamera();
+  ekf_vio::StereoVO::Params p;
+  p.min_pnp_points = 6;
+  p.max_translation_m = 0.5;
+  p.max_rotation_deg = 20.0;
+  p.kf_tracked_ratio = 0.99;  // any drop triggers KF if we allowed it
+  p.kf_min_tracked = 1000;    // also trigger on count
+  ekf_vio::StereoVO vo(cam, p);
+
+  auto lm_world = makeLandmarks(200, 2.0, 6.0);
+  auto feat0 = buildFeatures(cam, lm_world);
+  ASSERT_GT(feat0.size(), 50u);
+  vo.process(feat0);
+  const int kf_after_f0 = vo.numKeyframeLandmarks();
+
+  // 1.2 m jump: still projects in-view, but exceeds max_translation_m=0.5 so
+  // solveMotion3D3D succeeds and is sanity-rejected.  Shrink the feature list
+  // so shouldCreateKeyframe would fire if we incorrectly allowed it.
+  const Sophus::SE3d T_wc1 = Sophus::SE3d::trans(1.2, 0.0, 0.0);
+  auto lm_cam1 = transform(T_wc1.inverse(), lm_world);
+  auto feat1 = buildFeatures(cam, lm_cam1);
+  ASSERT_GE(feat1.size(), static_cast<size_t>(p.min_pnp_points));
+  feat1.resize(std::min(feat1.size(), static_cast<size_t>(20)));
+
+  vo.process(feat1);
+
+  // Pose held (rejected), and keyframe must NOT have been replaced.
+  EXPECT_NEAR(translationError(vo.pose(), Sophus::SE3d()), 0.0, 0.01);
+  EXPECT_EQ(vo.numKeyframeLandmarks(), kf_after_f0);
+
+  // A subsequent small, valid step from the original KF must still work —
+  // proves the KF was not poisoned with desynced landmarks/pose.
+  const Sophus::SE3d T_wc2 = Sophus::SE3d::trans(0.2, 0.0, 0.0);
+  auto lm_cam2 = transform(T_wc2.inverse(), lm_world);
+  auto feat2 = buildFeatures(cam, lm_cam2);
+  vo.process(feat2);
+  EXPECT_NEAR(vo.pose().translation().x(), 0.2, 0.08);
+}
+
+// ==========================================================================
 // Test: keyframe is created when tracking ratio drops
 // ==========================================================================
 TEST(StereoVOTest, CreatesNewKeyframeWhenTrackingDrops) {
