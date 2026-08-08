@@ -58,6 +58,12 @@ Sophus::SE3d StereoVO::process(const std::vector<Feature>& features) {
   // ------------------------------------------------------------------
   // Estimate motion via 3D-3D alignment (uses stereo depth from both frames)
   // ------------------------------------------------------------------
+  // createKeyframe stores landmarks in the *current* camera frame together with
+  // T_wc_.  That is only valid when T_wc_ was updated from this frame's features
+  // (motion accepted), or when we have zero KF tracks and must re-bootstrap.
+  // Creating a keyframe after a sanity-rejected motion would pair current p_c
+  // with a stale T_wc_ and permanently corrupt the world trajectory.
+  bool motion_accepted = false;
   if (tracked_from_kf >= params_.min_pnp_points) {
     Sophus::SE3d T_kf_curr;  // T_{kf_cam ← curr_cam}
     int inliers = 0;
@@ -75,6 +81,7 @@ Sophus::SE3d StereoVO::process(const std::vector<Feature>& features) {
       if (dt < params_.max_translation_m && angle_deg < params_.max_rotation_deg) {
         T_wc_ = T_wc_candidate;
         last_inlier_count_ = inliers;
+        motion_accepted = true;
       } else {
         get_logger()->debug("StereoVO: rejected motion — dt={:.3f}m angle={:.1f}deg", dt,
                             angle_deg);
@@ -85,7 +92,9 @@ Sophus::SE3d StereoVO::process(const std::vector<Feature>& features) {
   // ------------------------------------------------------------------
   // Keyframe management
   // ------------------------------------------------------------------
-  if (shouldCreateKeyframe(tracked_from_kf, static_cast<int>(keyframe_.landmarks.size()))) {
+  const bool rebootstrap = (tracked_from_kf == 0);
+  if ((motion_accepted || rebootstrap) &&
+      shouldCreateKeyframe(tracked_from_kf, static_cast<int>(keyframe_.landmarks.size()))) {
     createKeyframe(features);
   }
 

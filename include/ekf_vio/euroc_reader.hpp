@@ -74,8 +74,10 @@ class EurocReader {
   // Access ground truth (empty if not available)
   [[nodiscard]] const std::vector<GroundTruth>& groundTruth() const { return ground_truth_; }
 
-  // Find the closest ground truth entry to a timestamp (seconds)
-  bool closestGroundTruth(double t, GroundTruth& out) const;
+  // Find the closest ground truth entry to a timestamp (seconds).
+  // If max_dt >= 0, returns false when |t_gt - t| exceeds max_dt (no association).
+  // Pass max_dt < 0 to disable the gate (legacy "nearest neighbour" behaviour).
+  bool closestGroundTruth(double t, GroundTruth& out, double max_dt = -1.0) const;
 
   // Convenience: iterate through the dataset in chronological order.
   // Callbacks are invoked for each event type.

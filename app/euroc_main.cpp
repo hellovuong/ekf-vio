@@ -309,12 +309,20 @@ int main(int argc, char** argv) {
         // ── Initialisation ───────────────────────────────────────────────
         if (!initialized) {
           GroundTruth gt;
-          if (reader.closestGroundTruth(stereo.timestamp, gt)) {
+          // EuRoC GT often starts 1–2 s after the cameras.  Adopting the first
+          // GT pose at an earlier stereo timestamp silently initialises at the
+          // wrong time.  Wait until a GT sample lies within 50 ms.
+          constexpr double kGtInitMaxDt = 0.05;
+          if (reader.closestGroundTruth(stereo.timestamp, gt, kGtInitMaxDt)) {
             ekf.state().T_wb = Sophus::SE3d(Sophus::SO3d(gt.q), gt.p);
             ekf.state().v = gt.v;
             ekf.state().b_g = gt.b_g;
             ekf.state().b_a = gt.b_a;
-            log->info("Using ground truth at t={:.6f}s", stereo.timestamp);
+            log->info("Using ground truth at t={:.6f}s (gt_t={:.6f}s)", stereo.timestamp,
+                      gt.timestamp);
+          } else if (!reader.groundTruth().empty()) {
+            // GT exists but not yet overlapping — keep waiting.
+            return;
           } else {
             ekf.state().T_wb = Sophus::SE3d();
             ekf.state().v = Eigen::Vector3d::Zero();
