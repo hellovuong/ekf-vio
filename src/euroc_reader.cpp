@@ -60,10 +60,43 @@ bool EurocReader::load() {
     return false;
   }
 
-  // Build stereo timestamps from cam0 (cam0 is the reference / left camera)
+  // Pair cam0/cam1 by timestamp (not by CSV row index).  Index pairing silently
+  // mis-registers stereo when one stream is truncated or has a dropped frame,
+  // and crashes when cam1 is shorter than cam0.
+  constexpr double kStereoSyncTolSec = 1e-4;  // 0.1 ms
+  std::vector<std::pair<double, std::string>> synced0;
+  std::vector<std::pair<double, std::string>> synced1;
+  synced0.reserve(cam0_entries_.size());
+  synced1.reserve(cam0_entries_.size());
+  stereo_timestamps_.clear();
   stereo_timestamps_.reserve(cam0_entries_.size());
-  for (const auto& [t, _] : cam0_entries_)
-    stereo_timestamps_.push_back(t);
+
+  size_t j = 0;
+  size_t n_unmatched = 0;
+  for (const auto& [t0, path0] : cam0_entries_) {
+    while (j < cam1_entries_.size() && cam1_entries_[j].first < t0 - kStereoSyncTolSec)
+      ++j;
+    if (j < cam1_entries_.size() && std::abs(cam1_entries_[j].first - t0) <= kStereoSyncTolSec) {
+      synced0.emplace_back(t0, path0);
+      synced1.push_back(cam1_entries_[j]);
+      stereo_timestamps_.push_back(t0);
+      ++j;
+    } else {
+      ++n_unmatched;
+    }
+  }
+
+  if (synced0.empty()) {
+    get_logger()->warn("No temporally matched cam0/cam1 stereo pairs (tol={:.1e}s)",
+                       kStereoSyncTolSec);
+    return false;
+  }
+  if (n_unmatched > 0) {
+    get_logger()->warn("Dropped {} cam0 frames with no matching cam1 timestamp", n_unmatched);
+  }
+
+  cam0_entries_ = std::move(synced0);
+  cam1_entries_ = std::move(synced1);
 
   // Ground truth is optional
   loadGroundTruth();
@@ -198,19 +231,20 @@ StereoImages EurocReader::loadStereo(size_t stereo_index) const {
   StereoImages si;
   si.timestamp = stereo_timestamps_.at(stereo_index);
 
-  si.left = cv::imread(cam0_entries_[stereo_index].second, cv::IMREAD_GRAYSCALE);
-  si.right = cv::imread(cam1_entries_[stereo_index].second, cv::IMREAD_GRAYSCALE);
+  // Entries are equal-length and timestamp-matched after load().
+  si.left = cv::imread(cam0_entries_.at(stereo_index).second, cv::IMREAD_GRAYSCALE);
+  si.right = cv::imread(cam1_entries_.at(stereo_index).second, cv::IMREAD_GRAYSCALE);
 
   if (si.left.empty())
-    get_logger()->warn("Failed to load left image: {}", cam0_entries_[stereo_index].second);
+    get_logger()->warn("Failed to load left image: {}", cam0_entries_.at(stereo_index).second);
   if (si.right.empty())
-    get_logger()->warn("Failed to load right image: {}", cam1_entries_[stereo_index].second);
+    get_logger()->warn("Failed to load right image: {}", cam1_entries_.at(stereo_index).second);
 
   return si;
 }
 
 // ---------------------------------------------------------------------------
-bool EurocReader::closestGroundTruth(double t, GroundTruth& out) const {
+bool EurocReader::closestGroundTruth(double t, GroundTruth& out, double max_dt) const {
   if (ground_truth_.empty()) return false;
 
   // Binary search for closest timestamp
@@ -229,6 +263,11 @@ bool EurocReader::closestGroundTruth(double t, GroundTruth& out) const {
     auto prev = std::prev(it);
     out = (std::abs(it->timestamp - t) < std::abs(prev->timestamp - t)) ? *it : *prev;
   }
+
+  // Reject associations that are too far in time (e.g. EuRoC GT often starts
+  // ~1–2 s after the cameras).  Callers that need a hard sync — especially
+  // state initialisation — must not silently adopt a future/past pose.
+  if (max_dt >= 0.0 && std::abs(out.timestamp - t) > max_dt) return false;
   return true;
 }
 

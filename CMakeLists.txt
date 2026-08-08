@@ -164,6 +164,11 @@ if(BUILD_TESTING)
   target_link_libraries(ekf_test ekf_vio_core)
   target_compile_options(ekf_test PRIVATE ${EKF_VIO_WARN_FLAGS})
   set_target_properties(ekf_test PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
+
+  ament_add_gtest(euroc_reader_test test/euroc_reader_test.cpp)
+  target_link_libraries(euroc_reader_test ekf_vio_core)
+  target_compile_options(euroc_reader_test PRIVATE ${EKF_VIO_WARN_FLAGS})
+  set_target_properties(euroc_reader_test PROPERTIES CXX_CLANG_TIDY "clang-tidy;--warnings-as-errors=*")
 endif()
 
 ament_package()
