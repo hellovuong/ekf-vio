@@ -68,11 +68,17 @@ def associate(traj: np.ndarray, gt: np.ndarray, max_dt: float = 0.02):
 # ---------------------------------------------------------------------------
 
 def umeyama_alignment(model: np.ndarray, data: np.ndarray, with_scale: bool = False):
-    """Align model to data using Umeyama method. Returns s, R, t."""
+    """Align model to data using Umeyama method. Returns s, R, t.
+
+    Scale must use the *model* (source) variance. Using the data variance
+    recovers ~1/s instead of s and silently wrecks Sim(3) ATE for VO.
+    """
     mu_m = model.mean(axis=0)
     mu_d = data.mean(axis=0)
-    sigma2 = np.mean(np.sum((data - mu_d) ** 2, axis=1))
-    H = (data - mu_d).T @ (model - mu_m) / len(model)
+    model_c = model - mu_m
+    data_c = data - mu_d
+    sigma2 = np.mean(np.sum(model_c ** 2, axis=1))
+    H = data_c.T @ model_c / len(model)
     U, D, Vt = np.linalg.svd(H)
     S = np.eye(3)
     if np.linalg.det(U) * np.linalg.det(Vt) < 0:

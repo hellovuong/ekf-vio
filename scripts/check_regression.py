@@ -118,9 +118,20 @@ def main() -> int:
         "deg",
     )
 
-    # Check 3 — trajectory length (catches early crashes / short runs)
+    # Check 3 — associated pose count (catches early crashes / short runs).
+    # baselines.json stores min_poses; previously it was read but never applied,
+    # so a short prefix with a lucky RPE could pass the gate.
     min_poses = bl.get("min_poses", 0)
-    if "traj_len_gt" in mets and min_poses > 0:
+    n_poses = int(mets["num_associated"]) if "num_associated" in mets else None
+
+    if min_poses > 0 and n_poses is not None:
+        if n_poses < min_poses:
+            print(f"  [FAIL] Associated poses {n_poses} < min_poses {min_poses} — "
+                  f"sequence may not have run fully")
+            failed = True
+        else:
+            print(f"  [PASS] Associated poses {n_poses} >= min_poses {min_poses}")
+    elif "traj_len_gt" in mets and min_poses > 0:
         traj_len = mets["traj_len_gt"]
         if traj_len < 5.0:
             print(f"  [FAIL] GT trajectory length {traj_len:.2f} m looks too short — "
