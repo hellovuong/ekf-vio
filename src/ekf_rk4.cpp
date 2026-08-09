@@ -152,8 +152,8 @@ void EKFRk4::computeF(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c
 //
 // Overview
 // --------
-// Each stereo feature produces a 4-DOF measurement:
-//   z_i = [u_l, v_l, u_r, v_r]^T   (pixel observations in left and right images)
+// Each stereo feature produces a 3-DOF measurement:
+//   z_i = [u_l, v_l, u_r]^T   (rectified stereo: v_r ≡ v_l, not independent)
 //
 // The predicted measurement is obtained by projecting the stored world-frame
 // landmark p_w through the current pose estimate:
@@ -161,7 +161,7 @@ void EKFRk4::computeF(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c
 //   ẑ_i = π(p_c)  with  π(·) = pinhole + baseline shift for right image
 //
 // The residual (innovation):
-//   r_i = z_i − ẑ_i ∈ ℝ⁴
+//   r_i = z_i − ẑ_i ∈ ℝ³
 //
 // Landmark management
 // -------------------
@@ -175,18 +175,18 @@ void EKFRk4::computeF(const Eigen::Vector3d& omega_c, const Eigen::Vector3d& a_c
 // Three rejection stages before a measurement enters the Kalman update:
 //   1. Depth gate    : 0.1 m < z_c < 50 m  (numerical safety for projection)
 //   2. Pixel gate    : |r_i|_∞ < 40 px     (fast rejection of gross outliers)
-//   3. Mahalanobis   : r_i^T S_i^{-1} r_i < χ²(4, 0.99) = 9.488
+//   3. Mahalanobis   : r_i^T S_i^{-1} r_i < χ²(3, 0.95) = 7.815
 //                      where S_i = H_i P H_i^T + R_i   (innovation covariance)
-//      This is a chi-squared test with 4 DOF (4 pixel observations per landmark).
+//      This is a chi-squared test with 3 DOF per landmark.
 //
 // Sequential (iterated) Kalman update
 // ------------------------------------
 // Measurements are fused one at a time (sequential EKF update), which keeps
-// each individual update matrix small (4×4 inverse instead of 4N×4N) and
+// each individual update matrix small (3×3 inverse instead of 3N×3N) and
 // preserves positive-definiteness of P more easily.
 //
 // Joseph-form covariance update for numerical stability:
-//   K_k  = P H_k^T S_k^{-1}                   (Kalman gain, 15×4)
+//   K_k  = P H_k^T S_k^{-1}                   (Kalman gain, 15×3)
 //   dx_k = K_k r_k                              (state correction, 15×1)
 //   P    = (I − K_k H_k) P (I − K_k H_k)^T + K_k R K_k^T
 //        = IKH · P · IKH^T + K_k R K_k^T       (Joseph form — always PSD)
@@ -241,16 +241,19 @@ void EKFRk4::update(const std::vector<Feature>& features) {
   get_logger()->debug("[EKFRk4 upd]   new_landmarks={}  meas_candidates={}", n_new_landmarks, M);
   if (meas_indices.empty()) return;
 
-  // σ² = pixel noise variance; used in measurement covariance R_i = σ²·I₄
+  // σ² = pixel noise variance; used in measurement covariance R_i = σ²·I₃
   const double sig2 = noise_.sigma_pixel * noise_.sigma_pixel;
 
-  // χ²(4 DOF, 99th percentile) = 9.488 — Mahalanobis distance gating threshold.
-  const double chi2_thresh = 9.488;
+  // χ²(3 DOF, 95th percentile) = 7.815 — Mahalanobis gating threshold.
+  // z=[u_l,v_l,u_r] only: v_r is not independent under rectified stereo / ZNCC.
+  const double chi2_thresh = 7.815;
 
-  std::vector<Eigen::Vector4d> residuals;
-  std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+  // Accepted feature indices + prior residuals (for capping only).
+  // H and innovations are recomputed at the current state in the sequential loop.
+  std::vector<int> accepted_idx;
+  std::vector<Eigen::Vector3d> residuals;
+  accepted_idx.reserve(M);
   residuals.reserve(M);
-  jacobians.reserve(M);
 
   int n_behind_camera = 0;
   int n_pixel_gate_fail = 0;
@@ -280,14 +283,13 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     double ev_r = 0.0;
     project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
 
-    // Innovation (residual) r_i = z_i − ẑ_i ∈ ℝ⁴
-    Eigen::Vector4d res;
+    // Innovation (residual) r_i = z_i − ẑ_i ∈ ℝ³ , z = [u_l, v_l, u_r]
+    Eigen::Vector3d res;
     res(0) = f.u_l - eu_l;
     res(1) = f.v_l - ev_l;
     res(2) = f.u_r - eu_r;
-    res(3) = f.v_r - ev_r;
 
-    // ── Measurement Jacobian H_i (4×15) ───────────────────────────────────
+    // ── Measurement Jacobian H_i (3×15) ───────────────────────────────────
     // The observation model z = π(p_c(x)) chains two Jacobians:
     //
     //   ∂z/∂x = ∂π/∂p_c · ∂p_c/∂x
@@ -296,9 +298,8 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     //   For the left image (2×3):
     //     J_l = [ fx/z_c,   0,    −fx·x_c/z_c² ]
     //           [   0,    fy/z_c, −fy·y_c/z_c² ]
-    //   For the right image the x-column shifts by −baseline (disparity):
-    //     J_r = [ fx/z_c,   0,    −fx·(x_c−b)/z_c² ]
-    //           [   0,    fy/z_c, −fy·y_c/z_c²      ]
+    //   For right u only (1×3); v_r is not an independent measurement:
+    //     J_ur = [ fx/z_c,  0,  −fx·(x_c−b)/z_c² ]
     const double z_c = p_c_pred.z();
     const double z_c2 = z_c * z_c;
 
@@ -306,9 +307,8 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2, 0.0, cam_.fy / z_c,
         -cam_.fy * p_c_pred.y() / z_c2;
 
-    Eigen::Matrix<double, 2, 3> J_r;
-    J_r << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2, 0.0, cam_.fy / z_c,
-        -cam_.fy * p_c_pred.y() / z_c2;
+    Eigen::Matrix<double, 1, 3> J_ur;
+    J_ur << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2;
 
     // (b) Pose-to-point Jacobians ∂p_c/∂x:
     //
@@ -324,17 +324,17 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.T_wb.translation());
     const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
 
-    // Assemble H_i (4×15): non-zero blocks at position [0:3] and orientation [6:9]
+    // Assemble H_i (3×15): non-zero blocks at position [0:3] and orientation [6:9]
     // Layout: [ p(0:3) | v(3:6) | θ(6:9) | b_g(9:12) | b_a(12:15) ]
     //
-    //   H_i = [ J_l·(∂p_c/∂p)   0   J_l·(∂p_c/∂θ)   0   0 ]   ← left  (rows 0,1)
-    //         [ J_r·(∂p_c/∂p)   0   J_r·(∂p_c/∂θ)   0   0 ]   ← right (rows 2,3)
-    Eigen::Matrix<double, 4, 15> H_i;
+    //   H_i = [ J_l ·(∂p_c/∂p)   0   J_l ·(∂p_c/∂θ)   0   0 ]   ← left  (rows 0,1)
+    //         [ J_ur·(∂p_c/∂p)   0   J_ur·(∂p_c/∂θ)   0   0 ]   ← right u (row 2)
+    Eigen::Matrix<double, 3, 15> H_i;
     H_i.setZero();
-    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;      // ∂(left  pixel)/∂p
-    H_i.block<2, 3>(2, 0) = J_r * dp_c_dp;      // ∂(right pixel)/∂p
-    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;  // ∂(left  pixel)/∂θ
-    H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;  // ∂(right pixel)/∂θ
+    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;       // ∂(left  pixel)/∂p
+    H_i.block<1, 3>(2, 0) = J_ur * dp_c_dp;      // ∂(right u)/∂p
+    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;   // ∂(left  pixel)/∂θ
+    H_i.block<1, 3>(2, 6) = J_ur * dp_c_dtheta;  // ∂(right u)/∂θ
 
     // Gate 2 — pixel magnitude: fast gross-outlier rejection before the
     // more expensive Mahalanobis test.
@@ -345,19 +345,19 @@ void EKFRk4::update(const std::vector<Feature>& features) {
     }
 
     // Gate 3 — Mahalanobis distance: chi-squared test on the innovation.
-    //   S_i = H_i · P · H_i^T + R_i     (4×4 innovation covariance)
+    //   S_i = H_i · P · H_i^T + R_i     (3×3 innovation covariance)
     //   d²  = r_i^T · S_i^{-1} · r_i    (scalar Mahalanobis distance)
-    //   Accept if d² < χ²(4, 0.99) = 9.488
-    const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
-    const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
+    //   Accept if d² < χ²(3, 0.95) = 7.815
+    const Eigen::Matrix3d R_i = Eigen::Matrix3d::Identity() * sig2;
+    const Eigen::Matrix3d S_i = H_i * state_.P * H_i.transpose() + R_i;
     const double mahal = res.transpose() * S_i.inverse() * res;
     if (mahal > chi2_thresh) {
       ++n_mahal_fail;
       continue;
     }
 
+    accepted_idx.push_back(meas_indices[k]);
     residuals.push_back(res);
-    jacobians.push_back(H_i);
   }
 
   // ── Cap measurement count for runtime bound ────────────────────────────────
@@ -366,52 +366,84 @@ void EKFRk4::update(const std::vector<Feature>& features) {
   // sequential update loop without discarding completely — just prioritises
   // well-predicted features.
   const int max_meas = 200;
-  if (static_cast<int>(residuals.size()) > max_meas) {
-    std::vector<int> idx(residuals.size());
+  if (static_cast<int>(accepted_idx.size()) > max_meas) {
+    std::vector<int> idx(accepted_idx.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::partial_sort(idx.begin(), idx.begin() + max_meas, idx.end(),
                       [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
-    std::vector<Eigen::Vector4d> r2;
-    std::vector<Eigen::Matrix<double, 4, 15>> j2;
-    r2.reserve(max_meas);
-    j2.reserve(max_meas);
+    std::vector<int> a2;
+    a2.reserve(max_meas);
     for (int i = 0; i < max_meas; ++i) {
-      r2.push_back(residuals[idx[i]]);
-      j2.push_back(jacobians[idx[i]]);
+      a2.push_back(accepted_idx[idx[i]]);
     }
-    residuals = std::move(r2);
-    jacobians = std::move(j2);
+    accepted_idx = std::move(a2);
   }
 
   get_logger()->debug(
       "[EKFRk4 upd]   gating: behind_cam={}  pixel_fail={}  mahal_fail={}  accepted={}",
-      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
+      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, accepted_idx.size());
 
-  const auto N = static_cast<Eigen::Index>(residuals.size());
+  const auto N = static_cast<Eigen::Index>(accepted_idx.size());
   if (N == 0) return;
 
-  // Measurement noise covariance R = σ²·I₄  (isotropic pixel noise, both cameras)
-  const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
+  // Measurement noise covariance R = σ²·I₃  (isotropic pixel noise)
+  const Eigen::Matrix3d R_i = Eigen::Matrix3d::Identity() * sig2;
 
   // ── Sequential Kalman update (one measurement at a time) ──────────────────
+  // CRITICAL — recompute residual and H at the current state after each feature.
+  // Freezing prior innovations and applying them with shrinking P over-corrects.
   for (Eigen::Index k = 0; k < N; ++k) {
-    const Eigen::Matrix<double, 4, 15>& H_k = jacobians[k];
+    const Feature& f = features[accepted_idx[static_cast<size_t>(k)]];
+    const Eigen::Vector3d& p_w = landmarks_.at(f.id).p_w;
 
-    // Innovation covariance S_k = H_k · P · H_k^T + R   (4×4)
-    const Eigen::Matrix4d S_k = H_k * state_.P * H_k.transpose() + R_i;
+    const Eigen::Matrix3d R_wb_k = state_.T_wb.rotationMatrix();
+    const Eigen::Matrix3d R_cw_k = R_ci * R_wb_k.transpose();
+    const Eigen::Vector3d p_c_pred = worldToCam(p_w);
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
+
+    double eu_l = 0.0;
+    double ev_l = 0.0;
+    double eu_r = 0.0;
+    double ev_r = 0.0;
+    project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
+
+    Eigen::Vector3d res;
+    res(0) = f.u_l - eu_l;
+    res(1) = f.v_l - ev_l;
+    res(2) = f.u_r - eu_r;
+
+    const double z_c = p_c_pred.z();
+    const double z_c2 = z_c * z_c;
+    Eigen::Matrix<double, 2, 3> J_l;
+    J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2, 0.0, cam_.fy / z_c,
+        -cam_.fy * p_c_pred.y() / z_c2;
+    Eigen::Matrix<double, 1, 3> J_ur;
+    J_ur << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2;
+
+    const Eigen::Matrix3d dp_c_dp = -R_cw_k;
+    const Eigen::Vector3d p_imu = R_wb_k.transpose() * (p_w - state_.T_wb.translation());
+    const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
+
+    Eigen::Matrix<double, 3, 15> H_k;
+    H_k.setZero();
+    H_k.block<2, 3>(0, 0) = J_l * dp_c_dp;
+    H_k.block<1, 3>(2, 0) = J_ur * dp_c_dp;
+    H_k.block<2, 3>(0, 6) = J_l * dp_c_dtheta;
+    H_k.block<1, 3>(2, 6) = J_ur * dp_c_dtheta;
+
+    // Innovation covariance S_k = H_k · P · H_k^T + R   (3×3)
+    const Eigen::Matrix3d S_k = H_k * state_.P * H_k.transpose() + R_i;
 
     // Cholesky decomposition of S_k for numerically stable solve.
-    const Eigen::LLT<Eigen::Matrix4d> S_llt(S_k);
+    const Eigen::LLT<Eigen::Matrix3d> S_llt(S_k);
     if (S_llt.info() != Eigen::Success) continue;  // S not PD — skip (shouldn't happen post-gating)
 
-    // Kalman gain K_k = P · H_k^T · S_k^{-1}   (15×4)
-    // Solved as K_k = P · H_k^T · S_k^{-1} = (S_k^{-T} · H_k · P^T)^T
-    // using the Cholesky factor for inversion.
-    const Eigen::Matrix<double, 15, 4> K_k =
-        state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix4d::Identity());
+    // Kalman gain K_k = P · H_k^T · S_k^{-1}   (15×3)
+    const Eigen::Matrix<double, 15, 3> K_k =
+        state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix3d::Identity());
 
     // State correction vector dx = K_k · r_k ∈ ℝ¹⁵
-    const Eigen::Matrix<double, 15, 1> dx_k = K_k * residuals[k];
+    const Eigen::Matrix<double, 15, 1> dx_k = K_k * res;
     if (!dx_k.allFinite()) continue;
 
     // Apply correction on the manifold:
