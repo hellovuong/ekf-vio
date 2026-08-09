@@ -107,13 +107,18 @@ void EKF::update(const std::vector<Feature>& features) {
   // Build stacked residuals z and Jacobians H, with outlier rejection
   // ------------------------------------------------------------------
   const double sig2 = noise_.sigma_pixel * noise_.sigma_pixel;
-  // Chi-squared threshold for 4-DOF at 95% confidence
-  const double chi2_thresh = 9.488;
+  // Chi-squared threshold for 3-DOF at 95% confidence.
+  // Measurement is z=[u_l,v_l,u_r]: for rectified stereo, v_r≡v_l both in the
+  // observation model and (under ZNCC) in the tracker output, so a 4th residual
+  // on v_r would double-count the vertical constraint and over-weight pitch.
+  const double chi2_thresh = 7.815;
 
-  std::vector<Eigen::Vector4d> residuals;
-  std::vector<Eigen::Matrix<double, 4, 15>> jacobians;
+  // Accepted feature indices + prior residuals (for capping only).
+  // H and innovations are recomputed at the current state in the sequential loop.
+  std::vector<int> accepted_idx;
+  std::vector<Eigen::Vector3d> residuals;
+  accepted_idx.reserve(M);
   residuals.reserve(M);
-  jacobians.reserve(M);
 
   int n_behind_camera = 0;
   int n_pixel_gate_fail = 0;
@@ -139,14 +144,13 @@ void EKF::update(const std::vector<Feature>& features) {
     double ev_r = 0.0;
     project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
 
-    // Residual  z - h(x)
-    Eigen::Vector4d res;
+    // Residual  z - h(x)  with z = [u_l, v_l, u_r]
+    Eigen::Vector3d res;
     res(0) = f.u_l - eu_l;
     res(1) = f.v_l - ev_l;
     res(2) = f.u_r - eu_r;
-    res(3) = f.v_r - ev_r;
 
-    // --- Measurement Jacobian (4×15) ---
+    // --- Measurement Jacobian (3×15) for Mahalanobis gating ---
     const double z_c = p_c_pred.z();
     const double z_c2 = z_c * z_c;
 
@@ -155,11 +159,9 @@ void EKF::update(const std::vector<Feature>& features) {
     J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2, 0.0, cam_.fy / z_c,
         -cam_.fy * p_c_pred.y() / z_c2;
 
-    // ∂[u_r,v_r]/∂p_c  (right camera)
-    Eigen::Matrix<double, 2, 3> J_r;
-    // Horizontal stereo: u_r = fx*(X-b)/Z + cx,  v_r = fy*Y/Z + cy
-    J_r << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2, 0.0, cam_.fy / z_c,
-        -cam_.fy * p_c_pred.y() / z_c2;
+    // ∂u_r/∂p_c  (right camera horizontal only; v_r is not an independent meas)
+    Eigen::Matrix<double, 1, 3> J_ur;
+    J_ur << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2;
 
     // p_c = R_ci * R_wb^T * (p_w - p) + t_ci
     // ∂p_c/∂δp = -R_cw = -R_ci * R_wb^T
@@ -170,13 +172,13 @@ void EKF::update(const std::vector<Feature>& features) {
     const Eigen::Vector3d p_imu = R_wb.transpose() * (p_w - state_.T_wb.translation());
     const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
 
-    // Stack into H (4×15)
-    Eigen::Matrix<double, 4, 15> H_i;
+    // Stack into H (3×15)
+    Eigen::Matrix<double, 3, 15> H_i;
     H_i.setZero();
-    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;  // position
-    H_i.block<2, 3>(2, 0) = J_r * dp_c_dp;
-    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;  // orientation
-    H_i.block<2, 3>(2, 6) = J_r * dp_c_dtheta;
+    H_i.block<2, 3>(0, 0) = J_l * dp_c_dp;   // position → left
+    H_i.block<1, 3>(2, 0) = J_ur * dp_c_dp;  // position → right u
+    H_i.block<2, 3>(0, 6) = J_l * dp_c_dtheta;   // orientation → left
+    H_i.block<1, 3>(2, 6) = J_ur * dp_c_dtheta;  // orientation → right u
 
     // Pixel-space hard gate — independent of P size.
     // When P is large the innovation covariance S = H P Hᵀ + R is also
@@ -186,70 +188,61 @@ void EKF::update(const std::vector<Feature>& features) {
     constexpr double kMaxResidualPx = 40.0;
     if (res.cwiseAbs().maxCoeff() > kMaxResidualPx) {
       ++n_pixel_gate_fail;
-      get_logger()->debug("[EKF upd]   pixel gate reject: res=[{:.1f},{:.1f},{:.1f},{:.1f}]",
-                          res(0), res(1), res(2), res(3));
+      get_logger()->debug("[EKF upd]   pixel gate reject: res=[{:.1f},{:.1f},{:.1f}]", res(0),
+                          res(1), res(2));
       continue;
     }
 
     // Mahalanobis gating: reject outliers using innovation covariance
-    const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
-    const Eigen::Matrix4d S_i = H_i * state_.P * H_i.transpose() + R_i;
+    const Eigen::Matrix3d R_i = Eigen::Matrix3d::Identity() * sig2;
+    const Eigen::Matrix3d S_i = H_i * state_.P * H_i.transpose() + R_i;
     const double mahal = res.transpose() * S_i.inverse() * res;
     if (mahal > chi2_thresh) {
       ++n_mahal_fail;
       continue;
     }
 
+    accepted_idx.push_back(meas_indices[k]);
     residuals.push_back(res);
-    jacobians.push_back(H_i);
   }
 
-  // Cap to avoid oversized H matrices (keep top features by residual norm)
+  // Cap to avoid oversized update loops (keep top features by residual norm)
   const int max_meas = 200;
-  if (static_cast<int>(residuals.size()) > max_meas) {
+  if (static_cast<int>(accepted_idx.size()) > max_meas) {
     // Keep features with smallest residuals (best matches)
-    std::vector<int> idx(residuals.size());
+    std::vector<int> idx(accepted_idx.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::partial_sort(idx.begin(), idx.begin() + max_meas, idx.end(),
                       [&](int a, int b) { return residuals[a].norm() < residuals[b].norm(); });
-    std::vector<Eigen::Vector4d> r2;
-    std::vector<Eigen::Matrix<double, 4, 15>> j2;
-    r2.reserve(max_meas);
-    j2.reserve(max_meas);
+    std::vector<int> a2;
+    a2.reserve(max_meas);
     for (int i = 0; i < max_meas; ++i) {
-      r2.push_back(residuals[idx[i]]);
-      j2.push_back(jacobians[idx[i]]);
+      a2.push_back(accepted_idx[idx[i]]);
     }
-    residuals = std::move(r2);
-    jacobians = std::move(j2);
+    accepted_idx = std::move(a2);
   }
 
   get_logger()->debug(
       "[EKF upd]   gating: behind_cam={}  pixel_fail={}  mahal_fail={}  accepted={}",
-      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, residuals.size());
+      n_behind_camera, n_pixel_gate_fail, n_mahal_fail, accepted_idx.size());
 
-  const auto N = static_cast<Eigen::Index>(residuals.size());
+  const auto N = static_cast<Eigen::Index>(accepted_idx.size());
   if (N == 0) return;
 
   // ------------------------------------------------------------------
   // Sequential Kalman update
   //
-  // Batch update requires LDLT on a (4N × 4N) matrix — O((4N)^3) FLOP.
-  // At N=200 that is ~512M FLOP/frame and dominates runtime.
+  // Batch update requires LDLT on a (3N × 3N) matrix — O((3N)^3) FLOP.
+  // Sequential update processes each 3-DOF feature measurement
+  // independently.  Each step only needs a 3×3 Cholesky, so the total
+  // cost is O(N × 15²).
   //
-  // Sequential update processes each 4-DOF feature measurement
-  // independently.  Each step only needs a 4×4 Cholesky, so the total
-  // cost is O(N × 15²) ≈ 2M FLOP.
-  //
-  // IMPORTANT — apply state correction immediately after each feature.
-  // Accumulating dx and applying it at the end is wrong: P shrinks after
-  // each step, so later features get a very small K even though their
-  // residuals (computed at the prior state) can still be large.  The
-  // result is that early features dominate the correction and later
-  // measurements are effectively ignored, causing divergence on
-  // sequences with aggressive motion.
+  // CRITICAL — recompute residual and H at the current state after each
+  // feature.  Freezing innovations at the prior and applying them with
+  // shrinking P over-corrects (later features still see the full prior
+  // error).  That is NOT equivalent to the batch update.
   // ------------------------------------------------------------------
-  const Eigen::Matrix4d R_i = Eigen::Matrix4d::Identity() * sig2;
+  const Eigen::Matrix3d R_i = Eigen::Matrix3d::Identity() * sig2;
 
   get_logger()->debug("[EKF upd]   sequential update: N={}  P_trace_prior={:.4e}", N,
                       state_.P.trace());
@@ -258,20 +251,55 @@ void EKF::update(const std::vector<Feature>& features) {
   Eigen::Matrix<double, 15, 1> dx_total = Eigen::Matrix<double, 15, 1>::Zero();
 
   for (Eigen::Index k = 0; k < N; ++k) {
-    const Eigen::Matrix<double, 4, 15>& H_k = jacobians[k];
+    const Feature& f = features[accepted_idx[static_cast<size_t>(k)]];
+    const Eigen::Vector3d& p_w = landmarks_.at(f.id).p_w;
 
-    // Innovation covariance (4×4) — Cholesky is stable and trivially cheap
-    const Eigen::Matrix4d S_k = H_k * state_.P * H_k.transpose() + R_i;
-    const Eigen::LLT<Eigen::Matrix4d> S_llt(S_k);
+    // Re-linearise observation model at the current (partially updated) state
+    const Eigen::Matrix3d R_wb_k = state_.T_wb.rotationMatrix();
+    const Eigen::Matrix3d R_cw_k = R_ci * R_wb_k.transpose();
+    const Eigen::Vector3d p_c_pred = worldToCam(p_w);
+    if (p_c_pred.z() < 0.1 || p_c_pred.z() > 50.0) continue;
+
+    double eu_l = 0.0;
+    double ev_l = 0.0;
+    double eu_r = 0.0;
+    double ev_r = 0.0;
+    project(p_c_pred, eu_l, ev_l, eu_r, ev_r);
+
+    Eigen::Vector3d res;
+    res(0) = f.u_l - eu_l;
+    res(1) = f.v_l - ev_l;
+    res(2) = f.u_r - eu_r;
+
+    const double z_c = p_c_pred.z();
+    const double z_c2 = z_c * z_c;
+    Eigen::Matrix<double, 2, 3> J_l;
+    J_l << cam_.fx / z_c, 0.0, -cam_.fx * p_c_pred.x() / z_c2, 0.0, cam_.fy / z_c,
+        -cam_.fy * p_c_pred.y() / z_c2;
+    Eigen::Matrix<double, 1, 3> J_ur;
+    J_ur << cam_.fx / z_c, 0.0, -cam_.fx * (p_c_pred.x() - cam_.baseline) / z_c2;
+
+    const Eigen::Matrix3d dp_c_dp = -R_cw_k;
+    const Eigen::Vector3d p_imu = R_wb_k.transpose() * (p_w - state_.T_wb.translation());
+    const Eigen::Matrix3d dp_c_dtheta = R_ci * skew(p_imu);
+
+    Eigen::Matrix<double, 3, 15> H_k;
+    H_k.setZero();
+    H_k.block<2, 3>(0, 0) = J_l * dp_c_dp;
+    H_k.block<1, 3>(2, 0) = J_ur * dp_c_dp;
+    H_k.block<2, 3>(0, 6) = J_l * dp_c_dtheta;
+    H_k.block<1, 3>(2, 6) = J_ur * dp_c_dtheta;
+
+    // Innovation covariance (3×3) — Cholesky is stable and trivially cheap
+    const Eigen::Matrix3d S_k = H_k * state_.P * H_k.transpose() + R_i;
+    const Eigen::LLT<Eigen::Matrix3d> S_llt(S_k);
     if (S_llt.info() != Eigen::Success) continue;
 
-    // Kalman gain (15×4)
-    const Eigen::Matrix<double, 15, 4> K_k =
-        state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix4d::Identity());
+    // Kalman gain (15×3)
+    const Eigen::Matrix<double, 15, 3> K_k =
+        state_.P * H_k.transpose() * S_llt.solve(Eigen::Matrix3d::Identity());
 
-    // State correction for this feature — apply immediately so that P and
-    // state remain consistent when the next feature is processed
-    const Eigen::Matrix<double, 15, 1> dx_k = K_k * residuals[k];
+    const Eigen::Matrix<double, 15, 1> dx_k = K_k * res;
     if (!dx_k.allFinite()) continue;
 
     dx_total += dx_k;

@@ -181,6 +181,10 @@ def ate_stats(errors):
 
 def compute_rpe(p_est, q_est, p_gt, q_gt, delta_frames=10):
     """Compute relative pose error at fixed frame intervals.
+
+    Positions and quaternions must be in the *same* frame (do not mix
+    Umeyama-aligned positions with unaligned orientations — that silently
+    zeros or inflates translation RPE).
     Returns (trans_errors, rot_errors_deg).
     """
     n = len(p_est)
@@ -210,6 +214,36 @@ def compute_rpe(p_est, q_est, p_gt, q_gt, delta_frames=10):
         rot_errs.append(np.degrees(rot_to_angle(dR_err)))
 
     return np.array(trans_errs), np.array(rot_errs)
+
+
+def rotate_quats(q, R):
+    """Left-multiply each quaternion [w,x,y,z] by rotation matrix R."""
+    out = np.empty_like(q)
+    for i in range(len(q)):
+        Ri = R @ quat_to_rot(q[i])
+        # Eigenvalues of rotation → quaternion via Shepperd
+        tr = float(np.trace(Ri))
+        if tr > 0.0:
+            s = 2.0 * np.sqrt(tr + 1.0)
+            w, x = 0.25 * s, (Ri[2, 1] - Ri[1, 2]) / s
+            y, z = (Ri[0, 2] - Ri[2, 0]) / s, (Ri[1, 0] - Ri[0, 1]) / s
+        else:
+            k = int(np.argmax([Ri[0, 0], Ri[1, 1], Ri[2, 2]]))
+            if k == 0:
+                s = 2.0 * np.sqrt(1.0 + Ri[0, 0] - Ri[1, 1] - Ri[2, 2])
+                w, x = (Ri[2, 1] - Ri[1, 2]) / s, 0.25 * s
+                y, z = (Ri[0, 1] + Ri[1, 0]) / s, (Ri[0, 2] + Ri[2, 0]) / s
+            elif k == 1:
+                s = 2.0 * np.sqrt(1.0 + Ri[1, 1] - Ri[0, 0] - Ri[2, 2])
+                w, x = (Ri[0, 2] - Ri[2, 0]) / s, (Ri[0, 1] + Ri[1, 0]) / s
+                y, z = 0.25 * s, (Ri[1, 2] + Ri[2, 1]) / s
+            else:
+                s = 2.0 * np.sqrt(1.0 + Ri[2, 2] - Ri[0, 0] - Ri[1, 1])
+                w, x = (Ri[1, 0] - Ri[0, 1]) / s, (Ri[0, 2] + Ri[2, 0]) / s
+                y, z = (Ri[1, 2] + Ri[2, 1]) / s, 0.25 * s
+        out[i] = np.array([w, x, y, z], dtype=float)
+        out[i] /= np.linalg.norm(out[i])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +428,7 @@ def print_report(stats, rpe_t, rpe_r, traj_len_gt, traj_len_est, scale):
 
 
 def save_report(stats, rpe_t, rpe_r, traj_len_gt, traj_len_est, scale,
-                out_path):
+                out_path, num_associated=0):
     """Save metrics to a CSV file for batch comparisons."""
     with open(out_path, "w") as f:
         f.write("metric,value\n")
@@ -414,6 +448,7 @@ def save_report(stats, rpe_t, rpe_r, traj_len_gt, traj_len_est, scale,
         f.write(f"scale,{scale:.8f}\n")
         drift = stats["rmse"] / traj_len_gt * 100 if traj_len_gt > 0 else 0
         f.write(f"drift_pct,{drift:.8f}\n")
+        f.write(f"num_associated,{int(num_associated)}\n")
     print(f"[INFO] Metrics saved to {out_path}")
 
 
@@ -470,16 +505,19 @@ def main():
     p_gt  = gt["p"][gi]
     q_gt  = gt["q"][gi]
 
-    # Align
+    # Align (ATE only). RPE must use unaligned poses: mixing Umeyama-aligned
+    # positions with raw quaternions is inconsistent and can drive translation
+    # RPE to a false zero (or inflate it) under a non-trivial alignment rotation.
     R_al, t_al, s_al = align_umeyama(p_est, p_gt, with_scale=args.align_scale)
     p_est_al = apply_alignment(p_est, R_al, t_al, s_al)
+    q_est_al = rotate_quats(q_est, R_al)
 
     # ATE
     ate_errs = compute_ate(p_est_al, p_gt)
     stats = ate_stats(ate_errs)
 
-    # RPE
-    rpe_t, rpe_r = compute_rpe(p_est_al, q_est, p_gt, q_gt,
+    # RPE (unaligned, SE(3)-consistent pose pairs)
+    rpe_t, rpe_r = compute_rpe(p_est, q_est, p_gt, q_gt,
                                delta_frames=args.rpe_delta)
 
     # Trajectory lengths
@@ -492,7 +530,8 @@ def main():
     # Save
     os.makedirs(args.out, exist_ok=True)
     save_report(stats, rpe_t, rpe_r, traj_len_gt, traj_len_est, s_al,
-                os.path.join(args.out, "metrics.csv"))
+                os.path.join(args.out, "metrics.csv"),
+                num_associated=len(ei))
 
     # Save aligned trajectory for external tools (e.g. evo)
     aligned_path = os.path.join(args.out, "est_aligned.csv")
@@ -502,8 +541,8 @@ def main():
             f.write(f"{t_est[k]:.9f},"
                     f"{p_est_al[k,0]:.9f},{p_est_al[k,1]:.9f},"
                     f"{p_est_al[k,2]:.9f},"
-                    f"{q_est[k,0]:.9f},{q_est[k,1]:.9f},"
-                    f"{q_est[k,2]:.9f},{q_est[k,3]:.9f}\n")
+                    f"{q_est_al[k,0]:.9f},{q_est_al[k,1]:.9f},"
+                    f"{q_est_al[k,2]:.9f},{q_est_al[k,3]:.9f}\n")
     print(f"[INFO] Aligned trajectory saved to {aligned_path}")
 
     # Plots

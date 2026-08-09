@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include "ekf_vio/ekf.hpp"
+#include "ekf_vio/ekf_rk4.hpp"
 
 #include "ekf_vio/math_utils.hpp"
 #include "ekf_vio/types.hpp"
@@ -31,6 +32,16 @@ ekf_vio::StereoCamera makeCamera() {
 
 ekf_vio::EKF::NoiseParams defaultNoise() {
   ekf_vio::EKF::NoiseParams n;
+  n.sigma_gyro = 1.7e-4;
+  n.sigma_accel = 2.0e-3;
+  n.sigma_gyro_bias = 1.9e-5;
+  n.sigma_accel_bias = 3.0e-5;
+  n.sigma_pixel = 1.5;
+  return n;
+}
+
+ekf_vio::EKFRk4::NoiseParams defaultNoiseRk4() {
+  ekf_vio::EKFRk4::NoiseParams n;
   n.sigma_gyro = 1.7e-4;
   n.sigma_accel = 2.0e-3;
   n.sigma_gyro_bias = 1.9e-5;
@@ -444,6 +455,60 @@ TEST(EKFTest, EmptyFeaturesNoCrash) {
   ekf_vio::EKF ekf(cam, defaultNoise());
   ekf.update({});  // should not crash
   SUCCEED();
+}
+
+// ==========================================================================
+// Test: sequential update recomputes innovations (no frozen-residual overshoot)
+//
+// With many consistent features and a pure position prior error, freezing the
+// prior innovations and applying them sequentially with shrinking P overshoots
+// the true pose (often by several×).  Recomputing r and H each step must pull
+// the state toward truth without large overshoot past the origin.
+// ==========================================================================
+TEST(EKFTest, SequentialUpdateDoesNotOvershootWithManyFeatures) {
+  const auto cam = makeCamera();
+  ekf_vio::EKF ekf(cam, defaultNoise());
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  auto features = makeSyntheticFeatures(cam, 120);
+  ASSERT_GT(features.size(), 60u);
+
+  ekf.update(features);  // initialise landmarks at identity
+
+  constexpr double kErrorM = 0.10;
+  ekf.state().T_wb.translation() = Eigen::Vector3d(kErrorM, 0.0, 0.0);
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  ekf.update(features);  // correct toward identity
+
+  const double x = ekf.state().T_wb.translation().x();
+  EXPECT_NEAR(x, 0.0, 0.04) << "should correct most of the " << kErrorM << "m error";
+  EXPECT_GT(x, -0.03) << "frozen-residual sequential update overshoots past truth";
+}
+
+TEST(EKFRk4Test, SequentialUpdateDoesNotOvershootWithManyFeatures) {
+  const auto cam = makeCamera();
+  ekf_vio::EKFRk4 ekf(cam, defaultNoiseRk4());
+  ekf.state().T_wb = Sophus::SE3d();
+  ekf.state().v = Eigen::Vector3d::Zero();
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  auto features = makeSyntheticFeatures(cam, 120);
+  ASSERT_GT(features.size(), 60u);
+
+  ekf.update(features);
+
+  constexpr double kErrorM = 0.10;
+  ekf.state().T_wb.translation() = Eigen::Vector3d(kErrorM, 0.0, 0.0);
+  ekf.state().P = Eigen::Matrix<double, 15, 15>::Identity() * 1e-2;
+
+  ekf.update(features);
+
+  const double x = ekf.state().T_wb.translation().x();
+  EXPECT_NEAR(x, 0.0, 0.04);
+  EXPECT_GT(x, -0.03);
 }
 
 // ==========================================================================
